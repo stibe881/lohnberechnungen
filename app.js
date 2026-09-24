@@ -7,6 +7,7 @@
     const P = window.CVParser;
     const SETTINGS_KEY = 'cvrechner.settings.v1';
     const TARGET_KEY = 'cvrechner.target.v1';
+    const AI_KEY = 'cvrechner.ai.v1'; // getrennt von den Einstellungen, damit der API-Schlüssel nie exportiert wird
     const SPECIAL = [
         { id: '__sonstige', name: 'Sonstige' },
         { id: '__ausbildung', name: 'Ausbildung' }
@@ -34,6 +35,16 @@
     }
     function saveSettings() { storageSet(SETTINGS_KEY, JSON.stringify(settings)); }
 
+    let ai = loadAi();
+    function loadAi() {
+        try {
+            const a = JSON.parse(storageGet(AI_KEY));
+            if (a) return { enabled: !!a.enabled, apiKey: a.apiKey || '', model: a.model || '' };
+        } catch (e) { /* Standard verwenden */ }
+        return { enabled: false, apiKey: '', model: '' };
+    }
+    const aiActive = () => ai.enabled && !!ai.apiKey;
+
     // --- Helpers ---
     const $ = s => document.querySelector(s);
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -54,19 +65,31 @@
     }
 
     // --- Datei lesen ---
-    async function fileToText(file) {
+    async function readFile(file) {
         const name = file.name.toLowerCase();
         if (name.endsWith('.pdf') || file.type === 'application/pdf') {
-            if (!window.pdfjsLib) throw new Error('PDF-Bibliothek konnte nicht geladen werden (Internetverbindung?).');
-            return pdfToText(await file.arrayBuffer());
+            const buf = await file.arrayBuffer();
+            // Mit Claude wird das PDF direkt gelesen (auch eingescannte); der Text dient dann nur der Anzeige
+            const pdfBase64 = aiActive() ? toBase64(buf) : null;
+            let text = '';
+            if (window.pdfjsLib) text = await pdfToText(buf.slice(0)).catch(() => '');
+            else if (!pdfBase64) throw new Error('PDF-Bibliothek konnte nicht geladen werden (Internetverbindung?).');
+            return { text, pdfBase64 };
         }
         if (name.endsWith('.docx')) {
             if (!window.mammoth) throw new Error('Word-Bibliothek konnte nicht geladen werden (Internetverbindung?).');
             const res = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-            return res.value.replace(/\n{2,}/g, '\n');
+            return { text: res.value.replace(/\n{2,}/g, '\n'), pdfBase64: null };
         }
         if (name.endsWith('.doc')) throw new Error('Alte .doc-Dateien werden nicht unterstützt – bitte als PDF oder .docx speichern.');
-        return file.text();
+        return { text: await file.text(), pdfBase64: null };
+    }
+
+    function toBase64(buf) {
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        return btoa(bin);
     }
 
     async function pdfToText(buf) {
@@ -109,40 +132,79 @@
         return out.join('\n');
     }
 
-    function addCandidate(name, text, fileName) {
+    /** Wertet einen Lebenslauf aus: mit Claude, falls eingerichtet, sonst (oder bei Fehlern) mit den Regeln. */
+    async function analyzeCandidate(c) {
+        c.aiError = '';
+        c.hinweise = '';
+        if (aiActive()) {
+            try {
+                if (!window.CVAi) throw new Error('KI-Modul konnte nicht geladen werden (Internetverbindung?).');
+                const res = await window.CVAi.analyze({
+                    apiKey: ai.apiKey, model: ai.model, categories: settings.categories,
+                    pdfBase64: c.pdfBase64, text: c.text
+                });
+                c.entries = res.entries;
+                c.hinweise = res.hinweise;
+                if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
+                c.source = 'ki';
+                return;
+            } catch (e) {
+                c.aiError = e.message;
+            }
+        }
+        c.entries = P.extractEntries(c.text, settings);
+        c.source = 'regeln';
+    }
+
+    async function addCandidate(name, text, pdfBase64) {
         const c = {
             id: uid(),
             name: name.replace(/\.(pdf|docx|txt)$/i, '').replace(/[_]+/g, ' ').trim() || 'Unbenannt',
-            fileName: fileName || '',
+            autoName: true,
             text,
+            pdfBase64: pdfBase64 || null,
             target: defaultTarget,
-            entries: P.extractEntries(text, settings)
+            entries: []
         };
+        await analyzeCandidate(c);
         candidates.push(c);
         selectedId = c.id;
         return c;
     }
 
+    let busy = false;
+    async function withBusy(fn) {
+        if (busy) return;
+        busy = true;
+        document.body.classList.add('busy');
+        try { await fn(); } finally { busy = false; document.body.classList.remove('busy'); }
+    }
+
     async function handleFiles(files) {
         const list = Array.from(files);
         if (!list.length) return;
-        let ok = 0;
-        const errors = [];
-        for (const f of list) {
-            setStatus('Lese ' + f.name + ' …');
-            try {
-                const text = await fileToText(f);
-                if (!text.trim()) throw new Error('kein Text gefunden (eingescanntes Dokument?)');
-                const c = addCandidate(f.name, text, f.name);
-                if (!c.entries.length) errors.push(f.name + ': keine Zeiträume erkannt – bitte manuell ergänzen');
-                ok++;
-            } catch (e) {
-                errors.push(f.name + ': ' + e.message);
+        await withBusy(async () => {
+            let ok = 0;
+            const errors = [];
+            for (const [i, f] of list.entries()) {
+                const progress = list.length > 1 ? ` (${i + 1}/${list.length})` : '';
+                setStatus((aiActive() ? 'Claude wertet ' : 'Lese ') + f.name + ' aus' + progress + ' …');
+                try {
+                    const { text, pdfBase64 } = await readFile(f);
+                    if (!text.trim() && !pdfBase64) throw new Error('kein Text gefunden (eingescanntes Dokument? Mit der KI-Auswertung lesbar)');
+                    const c = await addCandidate(f.name, text, pdfBase64);
+                    if (c.aiError) errors.push(f.name + ': KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet');
+                    if (!c.entries.length) errors.push(f.name + ': keine Zeiträume erkannt – bitte manuell ergänzen');
+                    ok++;
+                    render();
+                } catch (e) {
+                    errors.push(f.name + ': ' + e.message);
+                }
             }
-        }
-        setStatus((ok ? ok + ' Lebenslauf/-läufe ausgewertet. ' : '') + errors.join(' · '), errors.length > 0 && !ok);
-        render();
-        $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setStatus((ok ? ok + ' Lebenslauf/-läufe ausgewertet. ' : '') + errors.join(' · '), errors.length > 0 && !ok);
+            render();
+            $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
     }
 
     // --- Rendering ---
@@ -158,6 +220,9 @@
 
     function render() {
         renderTargetSelect();
+        $('#privacy').innerHTML = aiActive()
+            ? '✨ KI-Auswertung mit Claude ist aktiv: Lebensläufe werden zur Auswertung an Anthropic (Claude API) gesendet.'
+            : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
         renderOverview();
         renderDetail();
     }
@@ -228,6 +293,9 @@
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
                 <label class="field"><span>Bewerbung als</span><select data-cf="target">${catOptions(c.target, false)}</select></label>
             </div>
+            <p class="source">${c.source === 'ki' ? '<span class="pill pill-ai">✨ ausgewertet mit Claude</span>' : '<span class="pill">ausgewertet mit Regeln</span>'}
+                ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}</p>
+            ${c.hinweise ? `<div class="notice"><b>Hinweis von Claude:</b> ${esc(c.hinweise)}</div>` : ''}
             <div class="stats">
                 <div class="stat"><div class="label">Berufserfahrung total</div><div class="value">${fmt(r.totalYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.totalYears)}</div></div>
                 <div class="stat"><div class="label">davon als ${esc(catName(c.target))}</div><div class="value">${fmt(r.targetYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.targetYears)}</div></div>
@@ -246,7 +314,7 @@
                 <button class="btn btn-ghost btn-sm" type="button" data-action="add">+ Stelle hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
             </div>
-            <details class="rawtext"><summary>Erkannter Text anzeigen</summary><pre>${esc(c.text)}</pre></details>
+            ${c.text.trim() ? `<details class="rawtext"><summary>Erkannter Text anzeigen</summary><pre>${esc(c.text)}</pre></details>` : ''}
         </div>`;
     }
 
@@ -275,14 +343,23 @@
         if ($('#pasteDialog').returnValue !== 'ok') return;
         const text = $('#pasteText').value;
         if (!text.trim()) return;
-        addCandidate($('#pasteName').value || 'Eingefügter Text', text);
-        setStatus('');
-        render();
+        const name = $('#pasteName').value;
+        withBusy(async () => {
+            setStatus(aiActive() ? 'Claude wertet den Text aus …' : '');
+            const c = await addCandidate(name || 'Eingefügter Text', text);
+            if (name) c.autoName = false;
+            setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
+            render();
+        });
     });
 
     $('#exampleBtn').addEventListener('click', () => {
-        addCandidate('Beispiel Anna Muster', EXAMPLE);
-        render();
+        withBusy(async () => {
+            setStatus(aiActive() ? 'Claude wertet das Beispiel aus …' : '');
+            const c = await addCandidate('Beispiel Anna Muster', EXAMPLE);
+            setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
+            render();
+        });
     });
 
     // --- Events: Übersicht ---
@@ -347,8 +424,12 @@
             inputs[inputs.length - 1]?.focus();
         } else if (act.dataset.action === 'reparse') {
             if (confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) {
-                c.entries = P.extractEntries(c.text, settings);
-                render();
+                withBusy(async () => {
+                    setStatus(aiActive() ? 'Claude wertet ' + c.name + ' neu aus …' : '');
+                    await analyzeCandidate(c);
+                    setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
+                    render();
+                });
             }
         }
     });
@@ -386,6 +467,14 @@
     // --- Einstellungen ---
     let draft = null;
 
+    function renderAiForm() {
+        const models = window.CVAi ? window.CVAi.MODELS : [{ id: 'claude-opus-5', name: 'Claude Opus 5' }];
+        const current = ai.model || (window.CVAi ? window.CVAi.DEFAULT_MODEL : 'claude-opus-5');
+        $('#aiEnabled').checked = ai.enabled;
+        $('#aiKey').value = ai.apiKey;
+        $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
+    }
+
     function renderSettingsForm() {
         $('#sSame').value = draft.sameFactor;
         $('#sRelated').value = draft.relatedFactor;
@@ -420,6 +509,7 @@
 
     $('#openSettings').addEventListener('click', () => {
         draft = clone(settings);
+        renderAiForm();
         renderSettingsForm();
         $('#settingsDialog').showModal();
     });
@@ -467,6 +557,9 @@
         if (!draft.categories.length) { alert('Es muss mindestens ein Beruf vorhanden sein.'); return; }
         settings = draft;
         saveSettings();
+        ai = { enabled: $('#aiEnabled').checked, apiKey: $('#aiKey').value.trim(), model: $('#aiModel').value };
+        storageSet(AI_KEY, JSON.stringify(ai));
+        if (ai.enabled && !ai.apiKey) setStatus('KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
         const ids = new Set(allCats().map(c => c.id));
         for (const c of candidates) {
             if (!settings.categories.some(k => k.id === c.target)) c.target = settings.categories[0].id;

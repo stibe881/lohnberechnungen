@@ -102,6 +102,15 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible, .dropzone:focus-v
 /* Upload */
 .upload-row { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 14px; }
 .upload-row .field { min-width: 240px; }
+.source { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -8px 0 14px; font-size: .8rem; }
+.pill { display: inline-block; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.pill-ai { background: var(--accent-soft); color: var(--accent); }
+.source-error { color: var(--warn); }
+.notice { font-size: .85rem; background: var(--warn-soft); color: var(--text); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+.hint a { color: var(--accent); }
+body.busy .dropzone, body.busy .upload-actions .btn, body.busy [data-action] { pointer-events: none; opacity: .55; }
+body.busy .status::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 8px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .privacy { font-size: .82rem; color: var(--muted); max-width: 420px; }
 .dropzone {
     border: 2px dashed var(--border); border-radius: var(--radius); padding: 28px 16px;

@@ -29,7 +29,7 @@
                     <span>Bewerbung als</span>
                     <select id="defaultTarget"></select>
                 </label>
-                <p class="privacy">🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.</p>
+                <p class="privacy" id="privacy"></p>
             </div>
             <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Lebensläufe auswählen">
                 <input type="file" id="fileInput" multiple accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden>
@@ -87,6 +87,13 @@
     <dialog id="settingsDialog" class="dialog dialog-wide">
         <form method="dialog" class="dialog-inner" id="settingsForm">
             <h2>Einstellungen</h2>
+            <h3>KI-Auswertung mit Claude</h3>
+            <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts und eingescannte PDFs)</label>
+            <div class="grid-2">
+                <label class="field"><span>Anthropic API-Schlüssel</span><input type="password" id="aiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+                <label class="field"><span>Modell</span><select id="aiModel"></select></label>
+            </div>
+            <p class="hint">Den Schlüssel erhältst du unter <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Er wird nur in diesem Browser gespeichert und nie mit den Einstellungen exportiert. Bei aktiver KI-Auswertung werden die Lebensläufe an Anthropic gesendet – bitte die Datenschutzvorgaben für Bewerbungsunterlagen beachten. Schlägt die KI-Auswertung fehl, rechnet die App automatisch mit den Regeln weiter.</p>
             <h3>Gewichtung</h3>
             <div class="grid-4">
                 <label class="field"><span>Gleicher Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sSame"><em>%</em></div></label>
@@ -121,6 +128,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <script src="parser.js"></script>
+    <script type="module" src="ai.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
