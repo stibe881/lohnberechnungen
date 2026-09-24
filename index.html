@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Lebenslauf-Rechner</title>
+    <meta name="description" content="Berufserfahrung aus Lebensläufen erkennen und gewichtet nach Zielberuf berechnen.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="wrap topbar-inner">
+            <div>
+                <h1>Lebenslauf-Rechner</h1>
+                <p class="sub">Berufserfahrung erkennen und nach Zielberuf gewichten</p>
+            </div>
+            <button class="btn btn-ghost" id="openSettings" type="button">⚙ Einstellungen</button>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <section class="card upload-card">
+            <div class="upload-row">
+                <label class="field">
+                    <span>Bewerbung als</span>
+                    <select id="defaultTarget"></select>
+                </label>
+                <p class="privacy">🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.</p>
+            </div>
+            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Lebensläufe auswählen">
+                <input type="file" id="fileInput" multiple accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden>
+                <div class="dz-icon">📄</div>
+                <strong>Lebensläufe hierher ziehen oder klicken</strong>
+                <span>PDF, Word (.docx) oder Text – mehrere gleichzeitig möglich</span>
+            </div>
+            <div class="upload-actions">
+                <button class="btn btn-ghost" id="pasteBtn" type="button">Text einfügen</button>
+                <button class="btn btn-ghost" id="exampleBtn" type="button">Beispiel laden</button>
+            </div>
+            <div id="status" class="status" role="status"></div>
+        </section>
+
+        <section id="overview" class="card" hidden>
+            <div class="section-head">
+                <h2>Übersicht</h2>
+                <button class="btn btn-ghost" id="exportCsv" type="button">CSV exportieren</button>
+            </div>
+            <div class="table-scroll">
+                <table class="table overview-table">
+                    <thead>
+                        <tr>
+                            <th>Person</th>
+                            <th>Bewerbung als</th>
+                            <th class="num">Total Jahre</th>
+                            <th class="num">im Zielberuf</th>
+                            <th class="num">andere Berufe</th>
+                            <th class="num">Anrechenbar</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="overviewBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="detail"></section>
+    </main>
+
+    <!-- Text einfügen -->
+    <dialog id="pasteDialog" class="dialog">
+        <form method="dialog" class="dialog-inner">
+            <h2>Lebenslauf als Text einfügen</h2>
+            <label class="field"><span>Name</span><input type="text" id="pasteName" placeholder="z. B. Anna Muster"></label>
+            <label class="field"><span>Text</span><textarea id="pasteText" rows="14" placeholder="Lebenslauf hier einfügen …"></textarea></label>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" value="cancel">Abbrechen</button>
+                <button class="btn btn-primary" value="ok" id="pasteOk">Auswerten</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Einstellungen -->
+    <dialog id="settingsDialog" class="dialog dialog-wide">
+        <form method="dialog" class="dialog-inner" id="settingsForm">
+            <h2>Einstellungen</h2>
+            <h3>Gewichtung</h3>
+            <div class="grid-4">
+                <label class="field"><span>Gleicher Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sSame"><em>%</em></div></label>
+                <label class="field"><span>Verwandter Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sRelated"><em>%</em></div></label>
+                <label class="field"><span>Anderer Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sOther"><em>%</em></div></label>
+                <label class="field"><span>Ausbildung</span><div class="suffix"><input type="number" min="0" max="100" id="sEdu"><em>%</em></div></label>
+            </div>
+            <div class="grid-2">
+                <label class="check"><input type="checkbox" id="sPensum"> Teilzeit anteilig anrechnen (z. B. 50 % Pensum = halbe Zeit)</label>
+                <label class="field"><span>Maximal anrechenbare Jahre (leer = kein Maximum)</span><input type="number" min="0" step="0.5" id="sMax"></label>
+            </div>
+
+            <h3>Berufe</h3>
+            <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Bei «verwandt» zählt die Erfahrung mit dem Faktor «Verwandter Beruf».</p>
+            <div id="catList" class="cat-list"></div>
+            <button class="btn btn-ghost" type="button" id="addCat">+ Beruf hinzufügen</button>
+
+            <div class="dialog-actions spread">
+                <div class="row-gap">
+                    <button class="btn btn-ghost" type="button" id="resetSettings">Standard wiederherstellen</button>
+                    <button class="btn btn-ghost" type="button" id="exportSettings">Exportieren</button>
+                    <label class="btn btn-ghost">Importieren<input type="file" id="importSettings" accept=".json,application/json" hidden></label>
+                </div>
+                <div class="row-gap">
+                    <button class="btn btn-ghost" value="cancel" formnovalidate>Abbrechen</button>
+                    <button class="btn btn-primary" value="save" id="saveSettings">Speichern</button>
+                </div>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="parser.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
