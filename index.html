@@ -26,8 +26,8 @@
         <section class="card upload-card">
             <div class="upload-row">
                 <label class="field">
-                    <span>Bewerbung als</span>
-                    <select id="defaultTarget"></select>
+                    <span>Stelle / Vorlage</span>
+                    <select id="defaultTemplate"></select>
                 </label>
                 <p class="privacy" id="privacy"></p>
             </div>
@@ -47,14 +47,17 @@
         <section id="overview" class="card" hidden>
             <div class="section-head">
                 <h2>Übersicht</h2>
-                <button class="btn btn-ghost" id="exportCsv" type="button">CSV exportieren</button>
+                <div class="row-gap">
+                    <button class="btn btn-ghost" id="reportAll" type="button">Alle Berichte (PDF)</button>
+                    <button class="btn btn-ghost" id="exportCsv" type="button">CSV exportieren</button>
+                </div>
             </div>
             <div class="table-scroll">
                 <table class="table overview-table">
                     <thead>
                         <tr>
                             <th>Person</th>
-                            <th>Bewerbung als</th>
+                            <th>Stelle / Vorlage</th>
                             <th class="num">Total Jahre</th>
                             <th class="num">im Zielberuf</th>
                             <th class="num">andere Berufe</th>
@@ -88,26 +91,32 @@
         <form method="dialog" class="dialog-inner" id="settingsForm">
             <h2>Einstellungen</h2>
             <h3>KI-Auswertung mit Claude</h3>
-            <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts und eingescannte PDFs)</label>
-            <div class="grid-2">
+            <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts)</label>
+            <div class="mode-row">
+                <label class="check"><input type="radio" name="aiMode" value="server"> Über euren Server (API-Schlüssel zentral hinterlegt)</label>
+                <label class="check"><input type="radio" name="aiMode" value="key"> Eigener API-Schlüssel in diesem Browser</label>
+            </div>
+            <div id="aiServerFields" class="grid-2">
+                <label class="field"><span>Zugangspasswort</span><input type="password" id="aiPassword" autocomplete="off"></label>
+                <p class="hint" id="serverStatus"></p>
+            </div>
+            <div id="aiKeyFields" class="grid-2">
                 <label class="field"><span>Anthropic API-Schlüssel</span><input type="password" id="aiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
-                <label class="field"><span>Modell</span><select id="aiModel"></select></label>
-            </div>
-            <p class="hint">Den Schlüssel erhältst du unter <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Er wird nur in diesem Browser gespeichert und nie mit den Einstellungen exportiert. Bei aktiver KI-Auswertung werden die Lebensläufe an Anthropic gesendet – bitte die Datenschutzvorgaben für Bewerbungsunterlagen beachten. Schlägt die KI-Auswertung fehl, rechnet die App automatisch mit den Regeln weiter.</p>
-            <h3>Gewichtung</h3>
-            <div class="grid-4">
-                <label class="field"><span>Gleicher Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sSame"><em>%</em></div></label>
-                <label class="field"><span>Verwandter Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sRelated"><em>%</em></div></label>
-                <label class="field"><span>Anderer Beruf</span><div class="suffix"><input type="number" min="0" max="100" id="sOther"><em>%</em></div></label>
-                <label class="field"><span>Ausbildung</span><div class="suffix"><input type="number" min="0" max="100" id="sEdu"><em>%</em></div></label>
+                <p class="hint">Erhältlich unter <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Wird nur in diesem Browser gespeichert und nie exportiert.</p>
             </div>
             <div class="grid-2">
-                <label class="check"><input type="checkbox" id="sPensum"> Teilzeit anteilig anrechnen (z. B. 50 % Pensum = halbe Zeit)</label>
-                <label class="field"><span>Maximal anrechenbare Jahre (leer = kein Maximum)</span><input type="number" min="0" step="0.5" id="sMax"></label>
+                <label class="field"><span>Modell</span><select id="aiModel"></select></label>
+                <label class="check"><input type="checkbox" id="aiTextOnly"> Nur Text an Claude senden (keine Fotos/Bilder aus PDFs – datensparsamer; eingescannte PDFs sind dann nicht lesbar)</label>
             </div>
+            <p class="hint">Bei aktiver KI-Auswertung werden die Lebensläufe an Anthropic (USA) gesendet. Bewerbende müssen darüber informiert sein. Schlägt die KI-Auswertung fehl, rechnet die App automatisch mit den Regeln weiter.</p>
+
+            <h3>Vorlagen (Stellen)</h3>
+            <p class="hint">Eine Vorlage enthält die Anrechnungsregeln für eine Stelle, z. B. nach eurem Lohnreglement. Beim Hochladen wählst du oben die Vorlage aus.</p>
+            <div id="tplList" class="tpl-list"></div>
+            <button class="btn btn-ghost" type="button" id="addTpl">+ Vorlage hinzufügen</button>
 
             <h3>Berufe</h3>
-            <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Bei «verwandt» zählt die Erfahrung mit dem Faktor «Verwandter Beruf».</p>
+            <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>
             <div id="catList" class="cat-list"></div>
             <button class="btn btn-ghost" type="button" id="addCat">+ Beruf hinzufügen</button>
 
@@ -125,9 +134,25 @@
         </form>
     </dialog>
 
+    <!-- Hinweis vor dem ersten Senden an Claude -->
+    <dialog id="privacyDialog" class="dialog">
+        <form method="dialog" class="dialog-inner">
+            <h2>Lebensläufe an Claude senden?</h2>
+            <p>Die Lebensläufe werden zur Auswertung an Anthropic (USA) übermittelt. Das ist nur zulässig, wenn die Bewerbenden darüber informiert wurden (Art. 19 DSG), z. B. in der Stellenausschreibung oder Datenschutzerklärung.</p>
+            <p class="hint">Das Ergebnis muss immer von einer zuständigen Person geprüft werden.</p>
+            <label class="check"><input type="checkbox" id="privacyRemember"> Nicht mehr fragen (in diesem Browser)</label>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" value="cancel">Nur mit Regeln auswerten</button>
+                <button class="btn btn-primary" value="ok">Bewerbende sind informiert – senden</button>
+            </div>
+        </form>
+    </dialog>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <script src="parser.js"></script>
+    <script src="timeline.js"></script>
+    <script src="report.js"></script>
     <script type="module" src="ai.js"></script>
     <script src="app.js"></script>
 </body>

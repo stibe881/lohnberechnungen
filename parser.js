@@ -115,24 +115,76 @@
     const EDU_RE = /(studium|studiengang|student(?:in)?\b|gymnasium|kantonsschule|matura|maturität|bachelor|master of|master\b|diplomstudium|lehrdiplom|lehrabschluss|lehre als|lehre zum|lehre zur|ausbildung zu|ausbildung als|berufslehre|berufsschule|sekundarschule|primarschule|realschule|bezirksschule|obligatorische schule|university|universität|hochschule|fachhochschule|\bph\b|\beth\b|\bcas\b|\bdas\b|\bmas\b|weiterbildung|zertifikat|certificate|degree)/i;
 
     // --- Standardeinstellungen ---
+    // Feste Sonderkategorien (nicht löschbar), mit eigenen Faktoren in den Vorlagen
+    const SPECIAL_CATEGORIES = [
+        { id: '__familie', name: 'Familienarbeit', keywords: ['familienarbeit', 'familienpause', 'familienzeit', 'familienphase', 'elternzeit', 'elternurlaub', 'mutterschaft', 'hausfrau', 'hausmann', 'betreuung der eigenen kinder', 'betreuung eigener kinder', 'erziehungsarbeit', 'erziehungszeit'] },
+        { id: '__dienst', name: 'Militär-/Zivildienst', keywords: ['militärdienst', 'militär', 'rekrutenschule', 'unteroffiziersschule', 'offiziersschule', 'durchdiener', 'zivildienst', 'zivi ', 'zivilschutz'] },
+        { id: '__sonstige', name: 'Sonstige', keywords: [] },
+        { id: '__ausbildung', name: 'Ausbildung', keywords: [] }
+    ];
+
+    const ROUNDING = [
+        { id: 'none', name: 'nicht runden' },
+        { id: 'half-down', name: 'auf halbe Jahre abrunden' },
+        { id: 'down', name: 'auf ganze Jahre abrunden' },
+        { id: 'nearest', name: 'auf ganze Jahre runden' }
+    ];
+
+    /** Anrechnungsregeln für eine Stelle (Vorlage). */
+    function makeTemplate(target, name) {
+        return {
+            id: 't_' + target + '_' + Math.random().toString(36).slice(2, 6),
+            name: name || 'Neue Vorlage',
+            target,
+            related: [],
+            sameFactor: 100,
+            relatedFactor: 75,
+            otherFactor: 50,
+            educationFactor: 0,
+            familyFactor: 50,
+            familyMaxYears: null,
+            serviceFactor: 50,
+            pensumMode: false,
+            minAge: null,
+            maxYears: null,
+            rounding: 'none'
+        };
+    }
+
     const DEFAULT_SETTINGS = {
-        sameFactor: 100,
-        relatedFactor: 75,
-        otherFactor: 50,
-        educationFactor: 0,
-        pensumMode: false,
-        maxYears: null,
         categories: [
-            { id: 'lehrperson', name: 'Lehrperson', related: [], keywords: ['lehrer', 'lehrerin', 'lehrperson', 'lehrkraft', 'primarlehr', 'sekundarlehr', 'reallehr', 'oberstufenlehr', 'kindergärtner', 'kindergartenlehr', 'kindergarten-lehr', 'fachlehr', 'klassenlehr', 'mittelschullehr', 'gymnasiallehr', 'berufsschullehr', 'heilpädagog', 'dozent', 'teacher', 'enseignant', 'vikariat', 'stellvertretung', 'lehrtätigkeit', 'unterricht'] },
-            { id: 'sozial', name: 'Sozialpädagogik / Betreuung', related: [], keywords: ['sozialpädagog', 'sozialarbeit', 'betreuer', 'betreuung', 'fabe', 'fachperson betreuung', 'kita', 'hort', 'tagesstruktur', 'jugendarbeit', 'erzieher', 'klassenassistenz', 'schulassistenz', 'spielgruppe'] },
-            { id: 'bildung', name: 'Erwachsenenbildung / Training', related: [], keywords: ['trainer', 'trainerin', 'kursleit', 'coach', 'ausbildner', 'ausbilder', 'berufsbildner', 'erwachsenenbildn', 'instruktor', 'nachhilfe', 'tutor'] },
-            { id: 'fuehrung', name: 'Führung / Management', related: [], keywords: ['schulleit', 'geschäftsführ', 'geschäftsleit', 'leiter', 'leiterin', 'leitung', 'head of', 'manager', 'direktor', 'rektor', 'ceo', 'teamlead', 'abteilungsleit'] },
-            { id: 'gesundheit', name: 'Gesundheit / Pflege', related: [], keywords: ['pflege', 'fage', 'fachperson gesundheit', 'arzt', 'ärztin', 'therapeut', 'mpa', 'spital', 'physiotherap', 'ergotherap', 'logopäd'] },
-            { id: 'kaufm', name: 'Kaufmännisch / Verwaltung', related: [], keywords: ['kaufm', 'kauffrau', 'kaufmann', 'sachbearbeit', 'buchhalt', 'administration', 'sekretär', 'sekretariat', 'office', 'verkauf', 'verkäufer', 'marketing', 'personal', 'hr ', 'treuhand', 'bank', 'versicherung', 'controlling', 'accountant'] },
-            { id: 'informatik', name: 'Informatik / Technik', related: [], keywords: ['informatik', 'software', 'entwickler', 'developer', 'engineer', 'ingenieur', 'ict', 'it-', 'support', 'applikation', 'system', 'programmier', 'techniker'] },
-            { id: 'handwerk', name: 'Handwerk / Gewerbe', related: [], keywords: ['schreiner', 'elektriker', 'elektroinstall', 'mechaniker', 'polymechaniker', 'maurer', 'zimmermann', 'monteur', 'koch', 'köchin', 'bäcker', 'gärtner', 'maler', 'sanitär', 'logistik', 'lagerist', 'chauffeur', 'service', 'gastronomie'] }
+            { id: 'lehrperson', name: 'Lehrperson', keywords: ['lehrer', 'lehrerin', 'lehrperson', 'lehrkraft', 'primarlehr', 'sekundarlehr', 'reallehr', 'oberstufenlehr', 'kindergärtner', 'kindergartenlehr', 'kindergarten-lehr', 'fachlehr', 'klassenlehr', 'mittelschullehr', 'gymnasiallehr', 'berufsschullehr', 'heilpädagog', 'dozent', 'teacher', 'enseignant', 'vikariat', 'stellvertretung', 'lehrtätigkeit', 'unterricht'] },
+            { id: 'sozial', name: 'Sozialpädagogik / Betreuung', keywords: ['sozialpädagog', 'sozialarbeit', 'betreuer', 'betreuung', 'fabe', 'fachperson betreuung', 'kita', 'hort', 'tagesstruktur', 'jugendarbeit', 'erzieher', 'klassenassistenz', 'schulassistenz', 'spielgruppe'] },
+            { id: 'bildung', name: 'Erwachsenenbildung / Training', keywords: ['trainer', 'trainerin', 'kursleit', 'coach', 'ausbildner', 'ausbilder', 'berufsbildner', 'erwachsenenbildn', 'instruktor', 'nachhilfe', 'tutor'] },
+            { id: 'fuehrung', name: 'Führung / Management', keywords: ['schulleit', 'geschäftsführ', 'geschäftsleit', 'leiter', 'leiterin', 'leitung', 'head of', 'manager', 'direktor', 'rektor', 'ceo', 'teamlead', 'abteilungsleit'] },
+            { id: 'gesundheit', name: 'Gesundheit / Pflege', keywords: ['pflege', 'fage', 'fachperson gesundheit', 'arzt', 'ärztin', 'therapeut', 'mpa', 'spital', 'physiotherap', 'ergotherap', 'logopäd'] },
+            { id: 'kaufm', name: 'Kaufmännisch / Verwaltung', keywords: ['kaufm', 'kauffrau', 'kaufmann', 'sachbearbeit', 'buchhalt', 'administration', 'sekretär', 'sekretariat', 'office', 'verkauf', 'verkäufer', 'marketing', 'personal', 'hr ', 'treuhand', 'bank', 'versicherung', 'controlling', 'accountant'] },
+            { id: 'informatik', name: 'Informatik / Technik', keywords: ['informatik', 'software', 'entwickler', 'developer', 'engineer', 'ingenieur', 'ict', 'it-', 'support', 'applikation', 'system', 'programmier', 'techniker'] },
+            { id: 'handwerk', name: 'Handwerk / Gewerbe', keywords: ['schreiner', 'elektriker', 'elektroinstall', 'mechaniker', 'polymechaniker', 'maurer', 'zimmermann', 'monteur', 'koch', 'köchin', 'bäcker', 'gärtner', 'maler', 'sanitär', 'logistik', 'lagerist', 'chauffeur', 'service', 'gastronomie'] }
         ]
     };
+
+    /** Ergänzt fehlende Felder und übernimmt Einstellungen aus älteren Versionen (globale Faktoren, «verwandt» je Beruf). */
+    function normalizeSettings(s) {
+        const out = { categories: [], templates: [] };
+        out.categories = (s.categories || []).map(c => ({ id: c.id, name: c.name, keywords: c.keywords || [] }));
+        if (Array.isArray(s.templates) && s.templates.length) {
+            out.templates = s.templates.map(t => Object.assign(makeTemplate(t.target), t));
+        } else {
+            out.templates = (s.categories || []).map(c => {
+                const t = makeTemplate(c.id, c.name);
+                t.id = 't_' + c.id;
+                for (const k of ['sameFactor', 'relatedFactor', 'otherFactor', 'educationFactor', 'pensumMode', 'maxYears']) if (s[k] !== undefined) t[k] = s[k];
+                t.related = (c.related || []).slice();
+                (s.categories || []).forEach(o => { if ((o.related || []).includes(c.id) && !t.related.includes(o.id)) t.related.push(o.id); });
+                return t;
+            });
+        }
+        const ids = new Set(out.categories.map(c => c.id));
+        out.templates.forEach(t => { t.related = (t.related || []).filter(r => ids.has(r)); });
+        out.templates = out.templates.filter(t => ids.has(t.target));
+        return out;
+    }
 
     function classify(title, details, categories) {
         const t = ' ' + (title || '').toLowerCase() + ' ';
@@ -203,7 +255,7 @@
             }
             const details = detailLines.join(' · ');
 
-            const cls = classify(title, details, settings.categories);
+            const cls = classify(title, details, settings.categories.concat(SPECIAL_CATEGORIES));
             let category = cls.category || '__sonstige';
             let isEdu = section === 'education';
             if (!isEdu && section !== 'experience' && !cls.titleHit && EDU_RE.test(title)) isEdu = true;
@@ -236,31 +288,54 @@
         return m ? (+m[1]) * 12 + (+m[2] - 1) : null;
     }
 
-    function factorFor(entry, target, settings) {
+    function factorFor(entry, rules) {
         if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return +entry.factorOverride;
-        if (entry.category === '__ausbildung') return settings.educationFactor;
-        if (target && entry.category === target) return settings.sameFactor;
-        const t = settings.categories.find(c => c.id === target);
-        const c = settings.categories.find(x => x.id === entry.category);
-        if ((t && t.related.includes(entry.category)) || (c && c.related.includes(target))) return settings.relatedFactor;
-        return settings.otherFactor;
+        switch (entry.category) {
+            case '__ausbildung': return rules.educationFactor;
+            case '__familie': return rules.familyFactor;
+            case '__dienst': return rules.serviceFactor;
+        }
+        if (entry.category === rules.target) return rules.sameFactor;
+        if ((rules.related || []).includes(entry.category)) return rules.relatedFactor;
+        return rules.otherFactor;
     }
 
+    function roundYears(y, mode) {
+        switch (mode) {
+            case 'down': return Math.floor(y + 1e-9);
+            case 'nearest': return Math.round(y);
+            case 'half-down': return Math.floor(y * 2 + 1e-9) / 2;
+            default: return y;
+        }
+    }
+
+    const NOT_WORK = new Set(['__ausbildung', '__familie']);
+
     /**
-     * Berechnet die anrechenbaren Jahre. Überschneidende Zeiträume werden nie doppelt gezählt:
-     * Pro Monat zählt die Tätigkeit mit dem höchsten Faktor (im Pensum-Modus werden die Pensen
-     * summiert, max. 100 %).
+     * Berechnet die anrechenbaren Jahre nach den Regeln einer Vorlage.
+     * Überschneidende Zeiträume werden nie doppelt gezählt: Pro Monat zählt die Tätigkeit mit dem
+     * höchsten Faktor (im Pensum-Modus werden die Pensen summiert, max. 100 %).
+     * Reihenfolge: Mindestalter → Obergrenze Familienarbeit → Maximum → Rundung.
+     * @param {Array} entries
+     * @param {object} rules   Vorlage (target, Faktoren, Grenzen, Rundung)
+     * @param {Date}  [today]
+     * @param {object} [opts]  { birth: 'YYYY-MM' }
      */
-    function compute(entries, target, settings, today) {
+    function compute(entries, rules, today, opts) {
         today = today || new Date();
+        opts = opts || {};
+        const target = rules.target;
         const nowIdx = today.getFullYear() * 12 + today.getMonth();
-        const months = new Map(); // idx -> [{entryIdx, w, cat}]
+        const birthIdx = ymToIndex(opts.birth);
+        const minIdx = birthIdx !== null && rules.minAge ? birthIdx + Math.round(rules.minAge * 12) : null;
+        const familyCap = rules.familyMaxYears ? Math.round(rules.familyMaxYears * 12) : Infinity;
+        const months = new Map(); // idx -> [{i, w, cat}]
         const perEntry = entries.map(() => ({ months: 0, credited: 0, factor: 0, valid: false }));
 
         entries.forEach((e, i) => {
             const s = ymToIndex(e.start);
             let en = e.ongoing ? nowIdx : ymToIndex(e.end);
-            const f = factorFor(e, target, settings);
+            const f = factorFor(e, rules);
             perEntry[i].factor = f;
             if (s === null || en === null) return;
             en = Math.min(en, nowIdx);
@@ -268,54 +343,88 @@
             perEntry[i].valid = true;
             perEntry[i].months = en - s + 1;
             if (!e.include) return;
-            const p = settings.pensumMode ? Math.max(0, Math.min(100, +e.pensum || 0)) / 100 : 1;
+            const p = rules.pensumMode ? Math.max(0, Math.min(100, +e.pensum || 0)) / 100 : 1;
             for (let k = s; k <= en; k++) {
                 if (!months.has(k)) months.set(k, []);
                 months.get(k).push({ i, w: (f / 100) * p, cat: e.category });
             }
         });
 
-        let totalMonths = 0, targetMonths = 0, credited = 0;
+        let totalMonths = 0, targetMonths = 0, credited = 0, beforeMinAge = 0, familyUsed = 0, familyCapped = false;
         const perCategory = {};
-        for (const list of months.values()) {
-            const work = list.filter(x => x.cat !== '__ausbildung');
+        for (const k of [...months.keys()].sort((a, b) => a - b)) {
+            let list = months.get(k);
+            const work = list.filter(x => !NOT_WORK.has(x.cat));
             if (work.length) totalMonths++;
             if (target && list.some(x => x.cat === target)) targetMonths++;
-            for (const cat of new Set(work.map(x => x.cat))) perCategory[cat] = (perCategory[cat] || 0) + 1;
+            for (const cat of new Set(list.filter(x => x.cat !== '__ausbildung').map(x => x.cat))) perCategory[cat] = (perCategory[cat] || 0) + 1;
+
+            if (minIdx !== null && k < minIdx) { if (list.some(x => x.w > 0)) beforeMinAge++; continue; }
+            if (familyUsed >= familyCap && list.some(x => x.cat === '__familie' && x.w > 0)) {
+                familyCapped = true;
+                list = list.filter(x => x.cat !== '__familie');
+                if (!list.length) continue;
+            }
 
             list.sort((a, b) => b.w - a.w);
-            if (settings.pensumMode) {
+            let usedFamily = false;
+            if (rules.pensumMode) {
                 let left = 1;
                 for (const x of list) {
                     const take = Math.min(left, x.w);
                     if (take <= 0) break;
                     perEntry[x.i].credited += take;
+                    if (x.cat === '__familie') usedFamily = true;
                     left -= take;
                 }
                 credited += 1 - left;
             } else if (list[0].w > 0) {
                 const w = Math.min(1, list[0].w);
                 perEntry[list[0].i].credited += w;
+                if (list[0].cat === '__familie') usedFamily = true;
                 credited += w;
             }
+            if (usedFamily) familyUsed++;
         }
 
-        let creditedYears = credited / 12;
+        const exactYears = credited / 12;
+        let creditedYears = exactYears;
         let capped = false;
-        if (settings.maxYears && creditedYears > settings.maxYears) { creditedYears = +settings.maxYears; capped = true; }
+        if (rules.maxYears && creditedYears > rules.maxYears) { creditedYears = +rules.maxYears; capped = true; }
+        const beforeRounding = creditedYears;
+        creditedYears = roundYears(creditedYears, rules.rounding);
 
         return {
             totalYears: totalMonths / 12,
             targetYears: targetMonths / 12,
             otherYears: (totalMonths - targetMonths) / 12,
+            exactYears,
+            beforeRounding,
             creditedYears,
             capped,
+            rounded: creditedYears !== beforeRounding,
+            beforeMinAgeYears: beforeMinAge / 12,
+            minAgeMonth: minIdx,
+            familyCapped,
             perEntry,
             perCategory
         };
     }
 
-    const api = { extractEntries, findRanges, tokenize, classify, compute, factorFor, detectSection, ymToIndex, DEFAULT_SETTINGS };
+    const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;
+
+    /** Sucht das Geburtsdatum im Text. Gibt 'YYYY-MM' oder '' zurück. */
+    function extractBirth(text) {
+        const m = BIRTH_RE.exec(text || '');
+        if (!m) return '';
+        if (m[3]) return m[3] + '-' + String(+m[2]).padStart(2, '0');
+        if (m[5]) return m[5] + '-' + String(+m[4]).padStart(2, '0');
+        return m[6] + '-01';
+    }
+
+    DEFAULT_SETTINGS.templates = DEFAULT_SETTINGS.categories.map(c => Object.assign(makeTemplate(c.id, c.name), { id: 't_' + c.id }));
+
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, factorFor, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, ROUNDING };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

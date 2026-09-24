@@ -1,0 +1,5 @@
+# config.php (API-Schlüssel) und Beispieldatei nie direkt ausliefern
+<FilesMatch "^config(\.sample)?\.php$">
+    Require all denied
+</FilesMatch>
+Options -Indexes

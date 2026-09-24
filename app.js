@@ -6,12 +6,11 @@
 
     const P = window.CVParser;
     const SETTINGS_KEY = 'cvrechner.settings.v1';
-    const TARGET_KEY = 'cvrechner.target.v1';
-    const AI_KEY = 'cvrechner.ai.v1'; // getrennt von den Einstellungen, damit der API-Schlüssel nie exportiert wird
-    const SPECIAL = [
-        { id: '__sonstige', name: 'Sonstige' },
-        { id: '__ausbildung', name: 'Ausbildung' }
-    ];
+    const TEMPLATE_KEY = 'cvrechner.template.v1';
+    const AI_KEY = 'cvrechner.ai.v1'; // getrennt von den Einstellungen, damit Schlüssel/Passwort nie exportiert werden
+    const PRIVACY_KEY = 'cvrechner.privacy-ack.v1';
+    const SERVER_URL = new URL('api/claude.php', location.href).href.replace(/\/$/, '');
+    const CONCURRENCY = 3; // so viele Lebensläufe wertet Claude gleichzeitig aus
 
     if (window.pdfjsLib) {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -20,30 +19,36 @@
     // --- State ---
     const clone = o => JSON.parse(JSON.stringify(o));
     let settings = loadSettings();
-    let defaultTarget = storageGet(TARGET_KEY) || settings.categories[0]?.id || '';
+    let defaultTemplateId = storageGet(TEMPLATE_KEY) || settings.templates[0]?.id || '';
     const candidates = []; // bewusst nur im Speicher: Lebensläufe werden nicht im Browser abgelegt
     let selectedId = null;
+    let ai = loadAi();
+    let server = { available: false, configured: false, passwordRequired: false };
+    let privacyAckSession = false;
 
     function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
     function storageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignorieren */ } }
     function loadSettings() {
         try {
             const s = JSON.parse(storageGet(SETTINGS_KEY));
-            if (s && Array.isArray(s.categories)) return Object.assign(clone(P.DEFAULT_SETTINGS), s);
+            if (s && Array.isArray(s.categories) && s.categories.length) {
+                const n = P.normalizeSettings(s);
+                if (n.templates.length) return n;
+            }
         } catch (e) { /* Standard verwenden */ }
         return clone(P.DEFAULT_SETTINGS);
     }
     function saveSettings() { storageSet(SETTINGS_KEY, JSON.stringify(settings)); }
-
-    let ai = loadAi();
     function loadAi() {
+        const d = { enabled: false, mode: 'server', apiKey: '', password: '', model: '', textOnly: true };
         try {
             const a = JSON.parse(storageGet(AI_KEY));
-            if (a) return { enabled: !!a.enabled, apiKey: a.apiKey || '', model: a.model || '' };
+            if (a) return Object.assign(d, a, { mode: a.mode || (a.apiKey ? 'key' : 'server') });
         } catch (e) { /* Standard verwenden */ }
-        return { enabled: false, apiKey: '', model: '' };
+        return d;
     }
-    const aiActive = () => ai.enabled && !!ai.apiKey;
+    const aiReady = () => ai.mode === 'server' ? server.configured : !!ai.apiKey;
+    const aiActive = () => ai.enabled && aiReady();
 
     // --- Helpers ---
     const $ = s => document.querySelector(s);
@@ -52,11 +57,14 @@
     function fmtYM(y) {
         const m = Math.round(y * 12);
         const yy = Math.floor(m / 12), mm = m % 12;
+        if (!yy) return mm + ' Mt.';
         return yy + ' J.' + (mm ? ' ' + mm + ' Mt.' : '');
     }
-    const allCats = () => settings.categories.concat(SPECIAL);
+    const allCats = () => settings.categories.concat(P.SPECIAL_CATEGORIES);
     const catName = id => (allCats().find(c => c.id === id) || { name: '–' }).name;
     const uid = () => 'c' + Math.random().toString(36).slice(2, 9);
+    const tplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
+    const computeFor = c => P.compute(c.entries, tplOf(c), undefined, { birth: c.birth });
 
     function setStatus(msg, isError) {
         const el = $('#status');
@@ -65,15 +73,20 @@
     }
 
     // --- Datei lesen ---
-    async function readFile(file) {
+    async function readFile(file, useAi) {
         const name = file.name.toLowerCase();
         if (name.endsWith('.pdf') || file.type === 'application/pdf') {
             const buf = await file.arrayBuffer();
-            // Mit Claude wird das PDF direkt gelesen (auch eingescannte); der Text dient dann nur der Anzeige
-            const pdfBase64 = aiActive() ? toBase64(buf) : null;
+            // Ohne «Nur Text senden» liest Claude das PDF direkt (auch eingescannte); der Text dient dann nur der Anzeige
+            const pdfBase64 = useAi && !ai.textOnly ? toBase64(buf) : null;
             let text = '';
             if (window.pdfjsLib) text = await pdfToText(buf.slice(0)).catch(() => '');
             else if (!pdfBase64) throw new Error('PDF-Bibliothek konnte nicht geladen werden (Internetverbindung?).');
+            if (!text.trim() && !pdfBase64) {
+                throw new Error(useAi
+                    ? 'kein Text gefunden (eingescannt?) – in den Einstellungen «Nur Text an Claude senden» ausschalten, damit Claude das PDF selbst liest'
+                    : 'kein Text gefunden (eingescanntes Dokument? Mit der KI-Auswertung lesbar)');
+            }
             return { text, pdfBase64 };
         }
         if (name.endsWith('.docx')) {
@@ -82,7 +95,9 @@
             return { text: res.value.replace(/\n{2,}/g, '\n'), pdfBase64: null };
         }
         if (name.endsWith('.doc')) throw new Error('Alte .doc-Dateien werden nicht unterstützt – bitte als PDF oder .docx speichern.');
-        return { text: await file.text(), pdfBase64: null };
+        const text = await file.text();
+        if (!text.trim()) throw new Error('die Datei ist leer');
+        return { text, pdfBase64: null };
     }
 
     function toBase64(buf) {
@@ -132,44 +147,55 @@
         return out.join('\n');
     }
 
-    /** Wertet einen Lebenslauf aus: mit Claude, falls eingerichtet, sonst (oder bei Fehlern) mit den Regeln. */
-    async function analyzeCandidate(c) {
+    // --- Auswertung ---
+
+    /** Wertet einen Lebenslauf aus: mit Claude, falls gewünscht, sonst (oder bei Fehlern) mit den Regeln. */
+    async function analyzeCandidate(c, useAi) {
         c.aiError = '';
         c.hinweise = '';
-        if (aiActive()) {
+        if (useAi) {
             try {
                 if (!window.CVAi) throw new Error('KI-Modul konnte nicht geladen werden (Internetverbindung?).');
-                const res = await window.CVAi.analyze({
-                    apiKey: ai.apiKey, model: ai.model, categories: settings.categories,
-                    pdfBase64: c.pdfBase64, text: c.text
-                });
+                const res = await window.CVAi.analyze(Object.assign(
+                    { model: ai.model, categories: settings.categories, pdfBase64: c.pdfBase64, text: c.text },
+                    ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }
+                ));
                 c.entries = res.entries;
                 c.hinweise = res.hinweise;
                 if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
+                if (res.birth && !c.birthEdited) c.birth = res.birth;
                 c.source = 'ki';
+                c.model = ai.model || window.CVAi.DEFAULT_MODEL;
                 return;
             } catch (e) {
                 c.aiError = e.message;
             }
         }
         c.entries = P.extractEntries(c.text, settings);
+        if (!c.birthEdited) c.birth = P.extractBirth(c.text) || c.birth || '';
         c.source = 'regeln';
     }
 
-    async function addCandidate(name, text, pdfBase64) {
-        const c = {
+    function newCandidate(name, text, pdfBase64) {
+        return {
             id: uid(),
             name: name.replace(/\.(pdf|docx|txt)$/i, '').replace(/[_]+/g, ' ').trim() || 'Unbenannt',
             autoName: true,
+            birth: '',
+            birthEdited: false,
             text,
             pdfBase64: pdfBase64 || null,
-            target: defaultTarget,
-            entries: []
+            templateId: defaultTemplateId,
+            entries: [],
+            loading: true
         };
-        await analyzeCandidate(c);
-        candidates.push(c);
-        selectedId = c.id;
-        return c;
+    }
+
+    /** Führt fn für alle Elemente aus, höchstens `limit` gleichzeitig. */
+    async function pool(items, limit, fn) {
+        let next = 0;
+        const worker = async () => { while (next < items.length) { const i = next++; await fn(items[i], i); } };
+        await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
     }
 
     let busy = false;
@@ -180,31 +206,123 @@
         try { await fn(); } finally { busy = false; document.body.classList.remove('busy'); }
     }
 
-    async function handleFiles(files) {
-        const list = Array.from(files);
-        if (!list.length) return;
+    /** Fragt vor dem ersten Senden an Claude nach, ob die Bewerbenden informiert sind. */
+    function ensurePrivacyAck() {
+        if (privacyAckSession || storageGet(PRIVACY_KEY) === '1') return Promise.resolve(true);
+        const dlg = $('#privacyDialog');
+        $('#privacyRemember').checked = false;
+        dlg.returnValue = '';
+        dlg.showModal();
+        return new Promise(resolve => {
+            dlg.addEventListener('close', () => {
+                const ok = dlg.returnValue === 'ok';
+                if (ok) {
+                    privacyAckSession = true;
+                    if ($('#privacyRemember').checked) storageSet(PRIVACY_KEY, '1');
+                }
+                resolve(ok);
+            }, { once: true });
+        });
+    }
+
+    /** Liest Dateien/Texte ein und wertet sie parallel aus. sources = [{name, file?, text?}] */
+    async function processSources(sources) {
+        if (!sources.length) return;
         await withBusy(async () => {
-            let ok = 0;
+            let useAi = aiActive();
+            if (useAi && !(await ensurePrivacyAck())) {
+                useAi = false;
+                setStatus('Nicht an Claude gesendet – Auswertung mit den Regeln.');
+            }
             const errors = [];
-            for (const [i, f] of list.entries()) {
-                const progress = list.length > 1 ? ` (${i + 1}/${list.length})` : '';
-                setStatus((aiActive() ? 'Claude wertet ' : 'Lese ') + f.name + ' aus' + progress + ' …');
+            const batch = [];
+            for (const src of sources) {
                 try {
-                    const { text, pdfBase64 } = await readFile(f);
-                    if (!text.trim() && !pdfBase64) throw new Error('kein Text gefunden (eingescanntes Dokument? Mit der KI-Auswertung lesbar)');
-                    const c = await addCandidate(f.name, text, pdfBase64);
-                    if (c.aiError) errors.push(f.name + ': KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet');
-                    if (!c.entries.length) errors.push(f.name + ': keine Zeiträume erkannt – bitte manuell ergänzen');
-                    ok++;
-                    render();
+                    const { text, pdfBase64 } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
+                    const c = newCandidate(src.name, text, pdfBase64);
+                    if (src.fixedName) c.autoName = false;
+                    batch.push(c);
                 } catch (e) {
-                    errors.push(f.name + ': ' + e.message);
+                    errors.push(src.name + ': ' + e.message);
                 }
             }
-            setStatus((ok ? ok + ' Lebenslauf/-läufe ausgewertet. ' : '') + errors.join(' · '), errors.length > 0 && !ok);
+            if (!batch.length) { setStatus(errors.join(' · '), true); return; }
+            candidates.push(...batch);
+            selectedId = batch[0].id;
+            render();
+
+            let done = 0;
+            const progress = () => setStatus((useAi ? 'Claude wertet aus: ' : 'Ausgewertet: ') + done + ' von ' + batch.length + ' …');
+            progress();
+            await pool(batch, useAi ? CONCURRENCY : 1, async c => {
+                await analyzeCandidate(c, useAi);
+                c.loading = false;
+                if (c.aiError) errors.push(c.name + ': KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet');
+                if (!c.entries.length) errors.push(c.name + ': keine Zeiträume erkannt – bitte manuell ergänzen');
+                done++;
+                progress();
+                renderOverview();
+                if (c.id === selectedId) renderDetail();
+            });
+            setStatus(batch.length + ' Lebenslauf/-läufe ausgewertet.' + (errors.length ? ' ' + errors.join(' · ') : ''), false);
             render();
             $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
+    }
+
+    // --- Darstellung der Regeln & Berechnung (auch für den Bericht) ---
+    function rulesText(t) {
+        const parts = [`gleicher Beruf (${catName(t.target)}) ${t.sameFactor} %`];
+        if (t.related.length) parts.push(`verwandte Berufe (${t.related.map(catName).join(', ')}) ${t.relatedFactor} %`);
+        parts.push(`andere Berufe ${t.otherFactor} %`);
+        parts.push(`Familienarbeit ${t.familyFactor} %` + (t.familyMaxYears ? ` (max. ${fmt(t.familyMaxYears)} J.)` : ''));
+        parts.push(`Militär-/Zivildienst ${t.serviceFactor} %`);
+        parts.push(`Ausbildung ${t.educationFactor} %`);
+        if (t.pensumMode) parts.push('Teilzeit anteilig');
+        if (t.minAge) parts.push(`angerechnet ab Alter ${t.minAge}`);
+        if (t.maxYears) parts.push(`höchstens ${fmt(t.maxYears)} J.`);
+        if (t.rounding && t.rounding !== 'none') parts.push((P.ROUNDING.find(r => r.id === t.rounding) || {}).name);
+        return parts.join(' · ');
+    }
+
+    /** Rechenweg als HTML (Werte sind Zahlen, Texte escaped). */
+    function formulaHtml(c, r, t) {
+        const groups = new Map();
+        c.entries.forEach((e, i) => {
+            const pe = r.perEntry[i];
+            if (!e.include || pe.factor <= 0 || pe.credited <= 0) return;
+            groups.set(pe.factor, (groups.get(pe.factor) || 0) + pe.credited / (pe.factor / 100));
+        });
+        if (!groups.size) return 'Noch keine anrechenbare Erfahrung erfasst.';
+        const parts = [...groups.entries()].sort((a, b) => b[0] - a[0]).map(([f, m]) => `${fmt(m / 12)} J. × ${f} %`);
+        let html = `${parts.join(' + ')} = <b>${fmt(r.exactYears)} J.</b>`;
+        const notes = [];
+        if (r.beforeMinAgeYears > 0) notes.push(`${fmt(r.beforeMinAgeYears)} J. vor dem Mindestalter von ${t.minAge} nicht angerechnet`);
+        if (!c.birth && t.minAge) notes.push(`Mindestalter ${t.minAge} nicht geprüft (Geburtsdatum fehlt)`);
+        if (r.familyCapped) notes.push(`Familienarbeit auf ${fmt(t.familyMaxYears)} J. begrenzt`);
+        if (r.capped) notes.push(`begrenzt auf ${fmt(t.maxYears)} J.`);
+        if (r.rounded) notes.push(`${(P.ROUNDING.find(x => x.id === t.rounding) || {}).name}: <b>${fmt(r.creditedYears)} J.</b>`);
+        else if (r.capped) notes.push(`<b>${fmt(r.creditedYears)} J.</b>`);
+        return html + (notes.length ? ' → ' + notes.join(' → ') : '');
+    }
+
+    function timelineHtml(c, r) {
+        return window.CVTimeline ? CVTimeline.render({ entries: c.entries, perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth }) : '';
+    }
+
+    function buildView(c) {
+        const r = computeFor(c);
+        const t = tplOf(c);
+        const modelName = (window.CVAi?.MODELS.find(m => m.id === c.model) || { name: c.model || 'Claude' }).name.replace(/ \(.*\)$/, '');
+        return {
+            name: c.name, birth: c.birth, entries: c.entries, result: r, template: t, catName,
+            hinweise: c.hinweise,
+            created: new Date().toLocaleDateString('de-CH'),
+            sourceText: c.source === 'ki' ? `KI-gestützt mit ${modelName} (Anthropic), durch eine Person geprüft` : 'regelbasiert (ohne KI), durch eine Person geprüft',
+            rulesText: rulesText(t),
+            formulaText: formulaHtml(c, r, t),
+            timeline: timelineHtml(c, r)
+        };
     }
 
     // --- Rendering ---
@@ -212,17 +330,18 @@
         const cats = includeSpecial ? allCats() : settings.categories;
         return cats.map(c => `<option value="${esc(c.id)}"${c.id === selected ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
     }
-
-    function renderTargetSelect() {
-        if (!settings.categories.some(c => c.id === defaultTarget)) defaultTarget = settings.categories[0]?.id || '';
-        $('#defaultTarget').innerHTML = catOptions(defaultTarget, false);
+    function tplOptions(selected) {
+        return settings.templates.map(t => `<option value="${esc(t.id)}"${t.id === selected ? ' selected' : ''}>${esc(t.name)}</option>`).join('');
     }
 
     function render() {
-        renderTargetSelect();
+        if (!settings.templates.some(t => t.id === defaultTemplateId)) defaultTemplateId = settings.templates[0]?.id || '';
+        $('#defaultTemplate').innerHTML = tplOptions(defaultTemplateId);
         $('#privacy').innerHTML = aiActive()
-            ? '✨ KI-Auswertung mit Claude ist aktiv: Lebensläufe werden zur Auswertung an Anthropic (Claude API) gesendet.'
-            : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
+            ? `✨ KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
+            : ai.enabled
+                ? '⚠️ KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
+                : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
         renderOverview();
         renderDetail();
     }
@@ -230,10 +349,15 @@
     function renderOverview() {
         $('#overview').hidden = candidates.length === 0;
         $('#overviewBody').innerHTML = candidates.map(c => {
-            const r = P.compute(c.entries, c.target, settings);
+            if (c.loading) {
+                return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
+                    <td><strong>${esc(c.name)}</strong></td><td>${esc(tplOf(c).name)}</td>
+                    <td colspan="4" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td><td></td></tr>`;
+            }
+            const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
-                <td><strong>${esc(c.name)}</strong></td>
-                <td>${esc(catName(c.target))}</td>
+                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ' <span class="mini-ai" title="ausgewertet mit Claude">✨</span>' : ''}</td>
+                <td>${esc(tplOf(c).name)}</td>
                 <td class="num">${fmt(r.totalYears)}</td>
                 <td class="num">${fmt(r.targetYears)}</td>
                 <td class="num">${fmt(r.otherYears)}</td>
@@ -247,20 +371,12 @@
         const c = candidates.find(x => x.id === selectedId);
         const el = $('#detail');
         if (!c) { el.innerHTML = ''; return; }
-        const r = P.compute(c.entries, c.target, settings);
-
-        // Aufschlüsselung nach Faktor
-        const groups = new Map();
-        c.entries.forEach((e, i) => {
-            const pe = r.perEntry[i];
-            if (!e.include || pe.factor <= 0 || pe.credited <= 0) return;
-            groups.set(pe.factor, (groups.get(pe.factor) || 0) + pe.credited / (pe.factor / 100));
-        });
-        const parts = [...groups.entries()].sort((a, b) => b[0] - a[0])
-            .map(([f, m]) => `${fmt(m / 12)} J. × ${f} %`);
-        const formula = parts.length
-            ? `${parts.join(' + ')} = <b>${fmt(r.capped ? r.creditedYears : [...groups.entries()].reduce((s, [f, m]) => s + m * f / 100, 0) / 12)} Jahre</b>${r.capped ? ` (begrenzt auf Maximum ${fmt(settings.maxYears)} J.)` : ''}`
-            : 'Noch keine anrechenbare Erfahrung erfasst.';
+        if (c.loading) {
+            el.innerHTML = `<div class="card"><h2>${esc(c.name)}</h2><p class="empty"><span class="spinner"></span> wird ausgewertet …</p></div>`;
+            return;
+        }
+        const t = tplOf(c);
+        const r = computeFor(c);
 
         const rows = c.entries.map((e, i) => {
             const pe = r.perEntry[i];
@@ -288,22 +404,28 @@
             </tr>`;
         }).join('');
 
+        const tl = timelineHtml(c, r);
         el.innerHTML = `<div class="card">
             <div class="detail-head">
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
-                <label class="field"><span>Bewerbung als</span><select data-cf="target">${catOptions(c.target, false)}</select></label>
+                <div class="head-fields">
+                    <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
+                    <label class="field"><span>Stelle / Vorlage</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
+                </div>
             </div>
             <p class="source">${c.source === 'ki' ? '<span class="pill pill-ai">✨ ausgewertet mit Claude</span>' : '<span class="pill">ausgewertet mit Regeln</span>'}
-                ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}</p>
+                ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}
+                ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
             ${c.hinweise ? `<div class="notice"><b>Hinweis von Claude:</b> ${esc(c.hinweise)}</div>` : ''}
             <div class="stats">
                 <div class="stat"><div class="label">Berufserfahrung total</div><div class="value">${fmt(r.totalYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.totalYears)}</div></div>
-                <div class="stat"><div class="label">davon als ${esc(catName(c.target))}</div><div class="value">${fmt(r.targetYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.targetYears)}</div></div>
+                <div class="stat"><div class="label">davon als ${esc(catName(t.target))}</div><div class="value">${fmt(r.targetYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.targetYears)}</div></div>
                 <div class="stat"><div class="label">andere Berufe</div><div class="value">${fmt(r.otherYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.otherYears)}</div></div>
-                <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.creditedYears)}</div></div>
+                <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
-            <div class="formula">${formula}</div>
-            ${c.entries.length ? `<div class="table-scroll"><table class="table entries-table">
+            <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))}</div></div>
+            ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
+            ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
                 <thead><tr>
                     <th title="Anrechnen">✓</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
                     <th>Pensum</th><th class="num">Dauer</th><th>Faktor</th><th class="num">Angerechnet</th><th></th>
@@ -313,24 +435,51 @@
             <div class="detail-actions">
                 <button class="btn btn-ghost btn-sm" type="button" data-action="add">+ Stelle hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
+                <button class="btn btn-primary btn-sm" type="button" data-action="report">Bericht (PDF)</button>
             </div>
             ${c.text.trim() ? `<details class="rawtext"><summary>Erkannter Text anzeigen</summary><pre>${esc(c.text)}</pre></details>` : ''}
         </div>`;
     }
 
+    // --- Tooltip für den Zeitstrahl ---
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    function showTip(target, x, y) {
+        tip.textContent = target.dataset.tip;
+        tip.hidden = false;
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x - w / 2)) + 'px';
+        tip.style.top = Math.max(8, y - h - 12) + 'px';
+    }
+    document.addEventListener('mousemove', e => {
+        const t = e.target.closest?.('[data-tip]');
+        if (t) showTip(t, e.clientX, e.clientY); else tip.hidden = true;
+    });
+    document.addEventListener('focusin', e => {
+        const t = e.target.closest?.('[data-tip]');
+        if (t) { const b = t.getBoundingClientRect(); showTip(t, b.left + b.width / 2, b.top); } else tip.hidden = true;
+    });
+    document.addEventListener('scroll', () => { tip.hidden = true; }, true);
+
     // --- Events: Upload ---
     const dz = $('#dropzone');
     dz.addEventListener('click', () => $('#fileInput').click());
     dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#fileInput').click(); } });
-    $('#fileInput').addEventListener('change', e => { handleFiles(e.target.files); e.target.value = ''; });
+    $('#fileInput').addEventListener('change', e => {
+        const files = Array.from(e.target.files);
+        e.target.value = '';
+        processSources(files.map(f => ({ name: f.name, file: f })));
+    });
     ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
     ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
-    dz.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+    dz.addEventListener('drop', e => processSources(Array.from(e.dataTransfer.files).map(f => ({ name: f.name, file: f }))));
 
-    $('#defaultTarget').addEventListener('change', e => {
-        defaultTarget = e.target.value;
-        storageSet(TARGET_KEY, defaultTarget);
-        candidates.forEach(c => { c.target = defaultTarget; });
+    $('#defaultTemplate').addEventListener('change', e => {
+        defaultTemplateId = e.target.value;
+        storageSet(TEMPLATE_KEY, defaultTemplateId);
+        candidates.forEach(c => { c.templateId = defaultTemplateId; });
         render();
     });
 
@@ -343,24 +492,11 @@
         if ($('#pasteDialog').returnValue !== 'ok') return;
         const text = $('#pasteText').value;
         if (!text.trim()) return;
-        const name = $('#pasteName').value;
-        withBusy(async () => {
-            setStatus(aiActive() ? 'Claude wertet den Text aus …' : '');
-            const c = await addCandidate(name || 'Eingefügter Text', text);
-            if (name) c.autoName = false;
-            setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
-            render();
-        });
+        const name = $('#pasteName').value.trim();
+        processSources([{ name: name || 'Eingefügter Text', text, fixedName: !!name }]);
     });
 
-    $('#exampleBtn').addEventListener('click', () => {
-        withBusy(async () => {
-            setStatus(aiActive() ? 'Claude wertet das Beispiel aus …' : '');
-            const c = await addCandidate('Beispiel Anna Muster', EXAMPLE);
-            setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
-            render();
-        });
-    });
+    $('#exampleBtn').addEventListener('click', () => processSources([{ name: 'Beispiel Anna Muster', text: EXAMPLE }]));
 
     // --- Events: Übersicht ---
     $('#overviewBody').addEventListener('click', e => {
@@ -375,15 +511,21 @@
         const row = e.target.closest('[data-select]');
         if (row) { selectedId = row.dataset.select; render(); }
     });
+    $('#reportAll').addEventListener('click', () => {
+        const ready = candidates.filter(c => !c.loading);
+        if (ready.length) CVReport.print(ready.map(buildView));
+    });
 
     // --- Events: Detail ---
     const detail = $('#detail');
     detail.addEventListener('change', e => {
         const c = candidates.find(x => x.id === selectedId);
-        if (!c) return;
+        if (!c || c.loading) return;
         const t = e.target;
         if (t.dataset.cf) {
             c[t.dataset.cf] = t.value;
+            if (t.dataset.cf === 'name') c.autoName = false;
+            if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
             return;
         }
@@ -400,12 +542,12 @@
             const now = new Date();
             entry.end = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
         }
-        if (f === 'category') entry.include = t.value !== '__ausbildung' || settings.educationFactor > 0;
+        if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).educationFactor > 0;
         render();
     });
     detail.addEventListener('click', e => {
         const c = candidates.find(x => x.id === selectedId);
-        if (!c) return;
+        if (!c || c.loading) return;
         const del = e.target.closest('[data-del]');
         if (del) {
             c.entries = c.entries.filter(x => x.id !== del.dataset.del);
@@ -417,20 +559,26 @@
         if (act.dataset.action === 'add') {
             c.entries.push({
                 id: 'e' + Math.random().toString(36).slice(2, 9), include: true, start: '', end: '', ongoing: false,
-                title: '', details: '', category: c.target, pensum: 100, factorOverride: null, raw: '', imprecise: false
+                title: '', details: '', category: tplOf(c).target, pensum: 100, factorOverride: null, raw: '', imprecise: false
             });
             render();
             const inputs = detail.querySelectorAll('input[data-f="title"]');
             inputs[inputs.length - 1]?.focus();
+        } else if (act.dataset.action === 'report') {
+            CVReport.print([buildView(c)]);
         } else if (act.dataset.action === 'reparse') {
-            if (confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) {
-                withBusy(async () => {
-                    setStatus(aiActive() ? 'Claude wertet ' + c.name + ' neu aus …' : '');
-                    await analyzeCandidate(c);
-                    setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
-                    render();
-                });
-            }
+            if (!confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) return;
+            withBusy(async () => {
+                let useAi = aiActive() && (await ensurePrivacyAck());
+                if (useAi && !c.pdfBase64 && !c.text.trim()) useAi = false; // nichts zum Senden vorhanden
+                setStatus(useAi ? 'Claude wertet ' + c.name + ' neu aus …' : '');
+                c.loading = true;
+                render();
+                await analyzeCandidate(c, useAi);
+                c.loading = false;
+                setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
+                render();
+            });
         }
     });
 
@@ -438,14 +586,14 @@
     $('#exportCsv').addEventListener('click', () => {
         const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
         const n = y => (Math.round(y * 100) / 100).toFixed(2).replace('.', ',');
-        const lines = [['Person', 'Bewerbung als', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre'].map(q).join(';')];
-        const details = [['Person', 'Funktion', 'Beruf', 'Von', 'Bis', 'Pensum %', 'Angerechnet (ja/nein)', 'Faktor %', 'Dauer Jahre', 'Angerechnete Jahre'].map(q).join(';')];
-        for (const c of candidates) {
-            const r = P.compute(c.entries, c.target, settings);
-            lines.push([q(c.name), q(catName(c.target)), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.creditedYears)].join(';'));
+        const lines = [['Person', 'Geburtsdatum', 'Stelle / Vorlage', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre (ungerundet)', 'Anrechenbare Jahre', 'Auswertung'].map(q).join(';')];
+        const details = [['Person', 'Funktion', 'Details', 'Beruf', 'Von', 'Bis', 'Pensum %', 'Angerechnet (ja/nein)', 'Faktor %', 'Dauer Jahre', 'Angerechnete Jahre'].map(q).join(';')];
+        for (const c of candidates.filter(x => !x.loading)) {
+            const r = computeFor(c);
+            lines.push([q(c.name), q(c.birth), q(tplOf(c).name), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.exactYears), n(r.creditedYears), q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
             c.entries.forEach((e, i) => {
                 const pe = r.perEntry[i];
-                details.push([q(c.name), q(e.title), q(catName(e.category)), q(e.start), q(e.ongoing ? 'heute' : e.end), e.pensum,
+                details.push([q(c.name), q(e.title), q(e.details), q(catName(e.category)), q(e.start), q(e.ongoing ? 'heute' : e.end), e.pensum,
                     q(e.include ? 'ja' : 'nein'), pe.factor, n(pe.months / 12), n(pe.credited / 12)].join(';'));
             });
         }
@@ -466,56 +614,159 @@
 
     // --- Einstellungen ---
     let draft = null;
+    let draftAi = null;
 
     function renderAiForm() {
         const models = window.CVAi ? window.CVAi.MODELS : [{ id: 'claude-opus-5', name: 'Claude Opus 5' }];
-        const current = ai.model || (window.CVAi ? window.CVAi.DEFAULT_MODEL : 'claude-opus-5');
-        $('#aiEnabled').checked = ai.enabled;
-        $('#aiKey').value = ai.apiKey;
+        const current = draftAi.model || (window.CVAi ? window.CVAi.DEFAULT_MODEL : 'claude-opus-5');
+        $('#aiEnabled').checked = draftAi.enabled;
+        document.querySelectorAll('input[name="aiMode"]').forEach(r => { r.checked = r.value === draftAi.mode; });
+        $('#aiKey').value = draftAi.apiKey;
+        $('#aiPassword').value = draftAi.password;
+        $('#aiTextOnly').checked = draftAi.textOnly;
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
+        $('#serverStatus').innerHTML = server.configured
+            ? '<span class="ok">✓ Server ist eingerichtet' + (server.passwordRequired ? ', Zugangspasswort erforderlich' : '') + '</span>'
+            : server.available
+                ? '<span class="warn">Server erreichbar, aber noch nicht eingerichtet (config.php fehlt, siehe Anleitung).</span>'
+                : '<span class="warn">Kein Server gefunden. Die Website braucht PHP-Hosting, siehe Anleitung.</span>';
+        $('#aiServerFields').hidden = draftAi.mode !== 'server';
+        $('#aiKeyFields').hidden = draftAi.mode !== 'key';
+    }
+    function readAiForm() {
+        draftAi.enabled = $('#aiEnabled').checked;
+        draftAi.mode = document.querySelector('input[name="aiMode"]:checked')?.value || 'server';
+        draftAi.apiKey = $('#aiKey').value.trim();
+        draftAi.password = $('#aiPassword').value;
+        draftAi.textOnly = $('#aiTextOnly').checked;
+        draftAi.model = $('#aiModel').value;
     }
 
-    function renderSettingsForm() {
-        $('#sSame').value = draft.sameFactor;
-        $('#sRelated').value = draft.relatedFactor;
-        $('#sOther').value = draft.otherFactor;
-        $('#sEdu').value = draft.educationFactor;
-        $('#sPensum').checked = !!draft.pensumMode;
-        $('#sMax').value = draft.maxYears ?? '';
+    const numField = (label, key, val, opts) => {
+        opts = opts || {};
+        return `<label class="field"><span>${label}</span><div class="suffix"><input type="number" data-t="${key}" min="0" ${opts.max !== undefined ? `max="${opts.max}"` : ''} step="${opts.step || 1}" value="${val ?? ''}" placeholder="${opts.placeholder || ''}"><em>${opts.unit || '%'}</em></div></label>`;
+    };
+
+    function renderTemplatesForm(openId) {
+        $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${t.id === openId ? 'open' : ''}>
+            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.find(c => c.id === t.target) || { name: '–' }).name)}</span></summary>
+            <div class="tpl-body">
+                <div class="grid-2">
+                    <label class="field"><span>Name der Vorlage (z. B. «Primarlehrperson»)</span><input type="text" data-t="name" value="${esc(t.name)}"></label>
+                    <label class="field"><span>Zielberuf (zählt mit «gleicher Beruf»)</span><select data-t="target">${draft.categories.map(c => `<option value="${esc(c.id)}"${c.id === t.target ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+                </div>
+                <div class="grid-4">
+                    ${numField('Gleicher Beruf', 'sameFactor', t.sameFactor, { max: 100 })}
+                    ${numField('Verwandter Beruf', 'relatedFactor', t.relatedFactor, { max: 100 })}
+                    ${numField('Anderer Beruf', 'otherFactor', t.otherFactor, { max: 100 })}
+                    ${numField('Ausbildung', 'educationFactor', t.educationFactor, { max: 100 })}
+                    ${numField('Familienarbeit', 'familyFactor', t.familyFactor, { max: 100 })}
+                    ${numField('Familienarbeit max.', 'familyMaxYears', t.familyMaxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
+                    ${numField('Militär-/Zivildienst', 'serviceFactor', t.serviceFactor, { max: 100 })}
+                    ${numField('Anrechnung ab Alter', 'minAge', t.minAge, { unit: 'J.', placeholder: 'kein' })}
+                    ${numField('Höchstens anrechenbar', 'maxYears', t.maxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
+                    <label class="field"><span>Rundung</span><select data-t="rounding">${P.ROUNDING.map(r => `<option value="${r.id}"${r.id === t.rounding ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
+                </div>
+                <label class="check"><input type="checkbox" data-t="pensumMode" ${t.pensumMode ? 'checked' : ''}> Teilzeit anteilig anrechnen (50 % Pensum = halbe Zeit)</label>
+                <div class="cat-related"><span>Verwandte Berufe (zählen mit «Verwandter Beruf»):</span>${draft.categories.filter(o => o.id !== t.target).map(o =>
+                    `<label class="check"><input type="checkbox" data-rel="${esc(o.id)}" ${t.related.includes(o.id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('')}</div>
+                <div class="row-gap">
+                    <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">Duplizieren</button>
+                    <button class="btn btn-ghost btn-sm" type="button" data-deltpl="${esc(t.id)}">Löschen</button>
+                </div>
+            </div>
+        </details>`).join('');
+    }
+
+    function renderCatsForm() {
         $('#catList').innerHTML = draft.categories.map(cat => `<div class="cat-item" data-cat="${esc(cat.id)}">
             <label class="field"><span>Bezeichnung</span><input type="text" data-k="name" value="${esc(cat.name)}" required></label>
             <label class="field"><span>Stichwörter (durch Komma getrennt)</span><textarea rows="2" data-k="keywords">${esc(cat.keywords.join(', '))}</textarea></label>
             <button class="btn-icon" type="button" data-delcat="${esc(cat.id)}" title="Beruf löschen" aria-label="Beruf löschen">✕</button>
-            <div class="cat-related"><span>Verwandt mit:</span>${draft.categories.filter(o => o.id !== cat.id).map(o =>
-                `<label class="check"><input type="checkbox" data-rel="${esc(o.id)}" ${cat.related.includes(o.id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('')}</div>
         </div>`).join('');
     }
 
+    function renderSettingsForm(openTplId) {
+        renderTemplatesForm(openTplId);
+        renderCatsForm();
+    }
+
     function readSettingsForm() {
-        const num = (id, d) => { const v = $(id).value; return v === '' ? d : Math.max(0, Math.min(100, +v)); };
-        draft.sameFactor = num('#sSame', 100);
-        draft.relatedFactor = num('#sRelated', 75);
-        draft.otherFactor = num('#sOther', 50);
-        draft.educationFactor = num('#sEdu', 0);
-        draft.pensumMode = $('#sPensum').checked;
-        draft.maxYears = $('#sMax').value === '' ? null : Math.max(0, +$('#sMax').value);
         document.querySelectorAll('#catList .cat-item').forEach(item => {
             const cat = draft.categories.find(c => c.id === item.dataset.cat);
             cat.name = item.querySelector('[data-k="name"]').value.trim() || 'Unbenannt';
             cat.keywords = item.querySelector('[data-k="keywords"]').value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-            cat.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel);
+        });
+        document.querySelectorAll('#tplList .tpl-item').forEach(item => {
+            const t = draft.templates.find(x => x.id === item.dataset.tpl);
+            const v = k => item.querySelector(`[data-t="${k}"]`).value;
+            const pct = (k, d) => v(k) === '' ? d : Math.max(0, Math.min(100, +v(k)));
+            const optNum = k => v(k) === '' || +v(k) <= 0 ? null : +v(k);
+            t.name = v('name').trim() || 'Unbenannte Vorlage';
+            t.target = v('target');
+            t.sameFactor = pct('sameFactor', 100);
+            t.relatedFactor = pct('relatedFactor', 75);
+            t.otherFactor = pct('otherFactor', 50);
+            t.educationFactor = pct('educationFactor', 0);
+            t.familyFactor = pct('familyFactor', 50);
+            t.serviceFactor = pct('serviceFactor', 50);
+            t.familyMaxYears = optNum('familyMaxYears');
+            t.minAge = optNum('minAge');
+            t.maxYears = optNum('maxYears');
+            t.rounding = v('rounding');
+            t.pensumMode = item.querySelector('[data-t="pensumMode"]').checked;
+            t.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel).filter(r => r !== t.target);
         });
     }
 
-    $('#openSettings').addEventListener('click', () => {
+    $('#openSettings').addEventListener('click', async () => {
         draft = clone(settings);
+        draftAi = clone(ai);
         renderAiForm();
         renderSettingsForm();
         $('#settingsDialog').showModal();
+        if (window.CVAi) { server = await CVAi.checkServer(SERVER_URL); renderAiForm(); }
+    });
+    $('#settingsDialog').addEventListener('change', e => {
+        if (e.target.name === 'aiMode' || e.target.id === 'aiEnabled') { readAiForm(); renderAiForm(); }
+        // Nur beim Zielberuf neu aufbauen (Liste «verwandt» ändert sich); sonst ginge die Eingabe im nächsten Feld verloren
+        if (e.target.dataset.t === 'target') {
+            readSettingsForm();
+            renderTemplatesForm(e.target.closest('.tpl-item')?.dataset.tpl);
+        }
+    });
+    $('#settingsDialog').addEventListener('input', e => {
+        if (e.target.dataset.t === 'name') {
+            const name = e.target.closest('.tpl-item')?.querySelector('.tpl-name');
+            if (name) name.textContent = e.target.value || 'Unbenannte Vorlage';
+        }
+    });
+    $('#addTpl').addEventListener('click', () => {
+        readSettingsForm();
+        const t = P.makeTemplate(draft.categories[0].id, 'Neue Vorlage');
+        draft.templates.push(t);
+        renderTemplatesForm(t.id);
+        document.querySelector(`#tplList [data-tpl="${t.id}"] [data-t="name"]`)?.select();
+    });
+    $('#tplList').addEventListener('click', e => {
+        const del = e.target.closest('[data-deltpl]');
+        const cp = e.target.closest('[data-copytpl]');
+        if (!del && !cp) return;
+        readSettingsForm();
+        if (del) {
+            if (draft.templates.length === 1) { alert('Es muss mindestens eine Vorlage vorhanden sein.'); return; }
+            draft.templates = draft.templates.filter(t => t.id !== del.dataset.deltpl);
+            renderTemplatesForm();
+        } else {
+            const src = draft.templates.find(t => t.id === cp.dataset.copytpl);
+            const t = Object.assign(clone(src), { id: P.makeTemplate(src.target).id, name: src.name + ' (Kopie)' });
+            draft.templates.splice(draft.templates.indexOf(src) + 1, 0, t);
+            renderTemplatesForm(t.id);
+        }
     });
     $('#addCat').addEventListener('click', () => {
         readSettingsForm();
-        draft.categories.push({ id: 'k' + Math.random().toString(36).slice(2, 8), name: 'Neuer Beruf', keywords: [], related: [] });
+        draft.categories.push({ id: 'k' + Math.random().toString(36).slice(2, 8), name: 'Neuer Beruf', keywords: [] });
         renderSettingsForm();
         const names = document.querySelectorAll('#catList [data-k="name"]');
         names[names.length - 1].select();
@@ -525,12 +776,17 @@
         if (!b) return;
         readSettingsForm();
         const id = b.dataset.delcat;
+        if (draft.categories.length === 1) { alert('Es muss mindestens ein Beruf vorhanden sein.'); return; }
+        const affected = draft.templates.filter(t => t.target === id);
+        if (affected.length && !confirm(`Vorlagen mit diesem Zielberuf werden ebenfalls gelöscht: ${affected.map(t => t.name).join(', ')}. Fortfahren?`)) return;
         draft.categories = draft.categories.filter(c => c.id !== id);
-        draft.categories.forEach(c => { c.related = c.related.filter(r => r !== id); });
+        draft.templates = draft.templates.filter(t => t.target !== id);
+        draft.templates.forEach(t => { t.related = t.related.filter(r => r !== id); });
+        if (!draft.templates.length) draft.templates.push(P.makeTemplate(draft.categories[0].id, draft.categories[0].name));
         renderSettingsForm();
     });
     $('#resetSettings').addEventListener('click', () => {
-        if (!confirm('Alle Einstellungen auf den Standard zurücksetzen?')) return;
+        if (!confirm('Berufe und Vorlagen auf den Standard zurücksetzen?')) return;
         draft = clone(P.DEFAULT_SETTINGS);
         renderSettingsForm();
     });
@@ -543,9 +799,9 @@
         e.target.value = '';
         if (!f) return;
         try {
-            const s = JSON.parse(await f.text());
-            if (!Array.isArray(s.categories)) throw new Error();
-            draft = Object.assign(clone(P.DEFAULT_SETTINGS), s);
+            const s = P.normalizeSettings(JSON.parse(await f.text()));
+            if (!s.categories.length || !s.templates.length) throw new Error();
+            draft = s;
             renderSettingsForm();
         } catch (err) {
             alert('Die Datei enthält keine gültigen Einstellungen.');
@@ -554,15 +810,15 @@
     $('#settingsDialog').addEventListener('close', () => {
         if ($('#settingsDialog').returnValue !== 'save') return;
         readSettingsForm();
-        if (!draft.categories.length) { alert('Es muss mindestens ein Beruf vorhanden sein.'); return; }
+        readAiForm();
         settings = draft;
         saveSettings();
-        ai = { enabled: $('#aiEnabled').checked, apiKey: $('#aiKey').value.trim(), model: $('#aiModel').value };
+        ai = draftAi;
         storageSet(AI_KEY, JSON.stringify(ai));
-        if (ai.enabled && !ai.apiKey) setStatus('KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
+        if (ai.enabled && !aiReady()) setStatus(ai.mode === 'server' ? 'KI-Auswertung ist eingeschaltet, aber der Server ist nicht eingerichtet.' : 'KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
         const ids = new Set(allCats().map(c => c.id));
         for (const c of candidates) {
-            if (!settings.categories.some(k => k.id === c.target)) c.target = settings.categories[0].id;
+            if (!settings.templates.some(t => t.id === c.templateId)) c.templateId = settings.templates[0].id;
             c.entries.forEach(e => { if (!ids.has(e.category)) e.category = '__sonstige'; });
         }
         render();
@@ -570,6 +826,7 @@
 
     const EXAMPLE = `Anna Muster
 Bahnhofstrasse 1, 6300 Zug
+Geburtsdatum: 14.05.1988
 
 Berufserfahrung
 08/2021 – heute    Primarlehrerin, Schule Herti Zug (Pensum 80%)
@@ -588,4 +845,7 @@ Sprachen
 Deutsch, Englisch`;
 
     render();
+    // Beim Laden prüfen, ob ein eingerichteter Server vorhanden ist (sobald das KI-Modul geladen ist)
+    const initServer = async () => { server = await CVAi.checkServer(SERVER_URL); render(); };
+    if (window.CVAi) initServer(); else window.addEventListener('cvai-ready', initServer, { once: true });
 })();
