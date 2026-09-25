@@ -486,7 +486,9 @@
             : ai.enabled
                 ? '⚠️ KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
                 : storeActive() ? '🔒 Lebensläufe werden in diesem Browser ausgelesen und nicht an Claude gesendet.' : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
-        if (storeActive()) $('#privacy').innerHTML += `<br>💾 Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`;
+        if (storeActive()) $('#privacy').innerHTML += `<br>💾 Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
+            + (store.error ? `<br><span class="warn">⚠️ ${esc(store.error)}</span>` : '');
+        else if (store.available) $('#privacy').innerHTML += `<br><span class="warn">⚠️ Personen werden nicht gespeichert und sind nach dem Neuladen weg: ${esc(storeReason())}</span>`;
         renderOverview();
         renderDetail();
         scheduleSave();
@@ -499,6 +501,10 @@
         'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
+    /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
+    const storeReason = () => !store.enabled ? (store.problem || 'Die Datenbank ist nicht eingerichtet.')
+        : !ai.password ? 'In den Einstellungen unter «Server und Zugang» fehlt das Zugangspasswort.'
+        : 'Speichern ist in den Einstellungen ausgeschaltet.';
     async function storeRequest(method, query, body) {
         const res = await fetch(CANDIDATES_URL + (query || ''), {
             method, cache: 'no-store',
@@ -548,7 +554,7 @@
     function scheduleSave() {
         if (!storeActive()) return;
         clearTimeout(saveTimer);
-        saveTimer = setTimeout(saveChanged, 800);
+        saveTimer = setTimeout(saveChanged, 300);
     }
     async function saveChanged() {
         if (saving) { scheduleSave(); return; }
@@ -563,7 +569,8 @@
             if (store.error) { store.error = ''; setStatus('Auswertungen wieder gespeichert.'); }
         } catch (e) {
             if (!store.error) setStatus('Auswertung konnte nicht in der Datenbank gespeichert werden: ' + e.message, true);
-            store.error = e.message;
+            store.error = 'Speichern fehlgeschlagen: ' + e.message;
+            $('#privacy').innerHTML = $('#privacy').innerHTML.replace(/<br><span class="warn">⚠️.*$/, '') + `<br><span class="warn">⚠️ ${esc(store.error)}</span>`;
         } finally {
             saving = false;
         }
@@ -1469,7 +1476,8 @@ Deutsch, Englisch`;
         if (changed) { render(); setStatus(`Zentrale Einstellungen geladen (Version ${sharedMeta.version}).`); }
         else if (shared.error) setStatus(shared.error, true);
     }).catch(() => {}).then(loadStored).then(n => {
-        if (n) { render(); setStatus(`${n} gespeicherte Auswertung${n > 1 ? 'en' : ''} geladen.`); }
+        render();
+        if (n) setStatus(`${n} gespeicherte Auswertung${n > 1 ? 'en' : ''} geladen.`);
     });
     if (window.CVAi) initServer(); else window.addEventListener('cvai-ready', initServer, { once: true });
 })();

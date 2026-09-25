@@ -318,3 +318,4 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 /* Vorgeschlagene Funktion */
 .suggestion { font-size: .85rem; background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; }
 .suggestion .link-btn { font-weight: 600; }
+.privacy .warn { color: var(--warn); font-weight: 600; }
