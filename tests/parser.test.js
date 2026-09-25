@@ -194,3 +194,50 @@ assert.strictEqual(multi.monthly, false);
 console.log('Gehaltstabelle (mehrzeilig) bestanden.');
 assert.strictEqual(P.parseSalaryTable([['Stand:', '01.01.2026', 'Beträge in CHF'], ['4', 'Jahreslohn', '50000']], 'g').validFrom, '2026-01-01');
 assert.strictEqual(P.parseSalaryTable([['4', '50000']], 'g').validFrom, null);
+
+// Lektionen/Stunden pro Klasse, Prüfung, Tabellenwahl nach Stichtag, Stufen aus der Tabelle
+const withLessons = P.parseSalaryTable([
+    ['4', 'Jahreslohn', '50000', '52000'],
+    ['13 Auzahlungen', '3846', '4000'],
+    ['pro Stunde', '23.17', '24.26'],
+    ['pro Lektion', '36.48', '38.20'],
+    ['5', 'Jahreslohn', '54000', '56000'],
+    ['pro Lektion', '40.73', '42.53']
+], 'l');
+assert.deepStrictEqual(withLessons.classes, { 4: [50000, 52000], 5: [54000, 56000] });
+assert.deepStrictEqual(withLessons.lessons, { 4: [36.48, 38.2], 5: [40.73, 42.53] });
+assert.deepStrictEqual(withLessons.hours, { 4: [23.17, 24.26] });
+assert.deepStrictEqual(P.checkSalaryTable(withLessons), []);
+const bad = P.checkSalaryTable({ classes: { 4: [50000, 49000, 52000], 6: [60000, 61000, 62000], 7: [59000, 60000] } });
+assert.ok(bad.some(w => /Lohnklasse 5 fehlt/.test(w)), bad);
+assert.ok(bad.some(w => /LK 4: Stufe 2/.test(w)), bad);
+assert.ok(bad.some(w => /LK 7 hat 2 Stufen/.test(w)), bad);
+assert.ok(bad.some(w => /LK 7 Stufe 1 ist nicht höher als LK 6/.test(w)), bad);
+
+const t26 = { id: 'a', validFrom: '2026-01-01', classes: { 12: [1] } };
+const t27 = { id: 'b', validFrom: '2027-01-01', classes: { 12: [2] } };
+const tplToday = rules('lehrperson');
+const tplYearEnd = rules('lehrperson', { cutoff: 'yearEnd' });
+assert.strictEqual(P.selectSalaryTable([t26, t27], tplToday, new Date(2026, 8, 24)).table.id, 'a');
+assert.strictEqual(P.selectSalaryTable([t26, t27], tplToday, new Date(2027, 0, 5)).table.id, 'b');
+assert.strictEqual(P.selectSalaryTable([t26, t27], tplYearEnd, new Date(2026, 11, 31)).table.id, 'a');
+assert.strictEqual(P.selectSalaryTable([t27], tplToday, new Date(2026, 8, 24)).future, true);
+assert.strictEqual(P.selectSalaryTable([t26, t27], rules('lehrperson', { salaryTableId: 'b' }), new Date(2026, 8, 24)).table.id, 'b');
+assert.strictEqual(P.selectSalaryTable([], tplToday).table, null);
+
+const plTpl = rules('lehrperson', { classMin: 4, classMax: 4 });
+const small = { classes: { 4: [50000, 52000, 54000] }, lessons: { 4: [36, 38, 40] } };
+const plS = P.placement(20, plTpl, null, small);
+assert.strictEqual(plS.stage, 3);
+assert.strictEqual(plS.maxStage, 3);
+assert.strictEqual(plS.salary, 54000);
+assert.strictEqual(plS.lesson, 40);
+assert.strictEqual(P.placement(20, plTpl, null, null).stage, 10);
+
+// Alte Einstellungen mit einer einzelnen Gehaltstabelle werden übernommen
+const migrated = P.normalizeSettings(Object.assign({}, S, { salaryTables: undefined, salaryTable: { name: 'Alt', classes: { 4: [1, 2] } } }));
+assert.strictEqual(migrated.salaryTables.length, 1);
+assert.strictEqual(migrated.salaryTables[0].name, 'Alt');
+assert.ok(migrated.salaryTables[0].id);
+assert.strictEqual(migrated.templates[0].payments, 13);
+console.log('Gehaltstabellen (Lektionen/Prüfung/Stichtag/Stufen) bestanden.');

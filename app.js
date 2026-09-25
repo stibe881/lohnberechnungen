@@ -10,6 +10,8 @@
     const AI_KEY = 'cvrechner.ai.v1'; // getrennt von den Einstellungen, damit Schlüssel/Passwort nie exportiert werden
     const PRIVACY_KEY = 'cvrechner.privacy-ack.v1';
     const SERVER_URL = new URL('api/claude.php', location.href).href.replace(/\/$/, '');
+    const SETTINGS_URL = new URL('api/settings.php', location.href).href;
+    const SHARED_KEY = 'cvrechner.shared.v1'; // Version der zuletzt geladenen/gespeicherten zentralen Einstellungen
     const CONCURRENCY = 3; // so viele Lebensläufe wertet Claude gleichzeitig aus
 
     if (window.pdfjsLib) {
@@ -24,6 +26,9 @@
     let selectedId = null;
     let ai = loadAi();
     let server = { available: false, configured: false, passwordRequired: false };
+    // Zentrale Einstellungen (api/settings.php): Status vom Server und zuletzt bekannte Version
+    let shared = { available: false, enabled: false, exists: false, version: 0, updatedAt: null, adminRequired: false, problem: '', error: '' };
+    let sharedMeta = (() => { try { return JSON.parse(storageGet(SHARED_KEY)) || null; } catch (e) { return null; } })();
     let privacyAckSession = false;
 
     function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -40,7 +45,7 @@
     }
     function saveSettings() { storageSet(SETTINGS_KEY, JSON.stringify(settings)); }
     function loadAi() {
-        const d = { enabled: false, mode: 'server', apiKey: '', password: '', model: '', textOnly: true };
+        const d = { enabled: false, mode: 'server', apiKey: '', password: '', adminPassword: '', model: '', textOnly: true, shared: true };
         try {
             const a = JSON.parse(storageGet(AI_KEY));
             if (a) return Object.assign(d, a, { mode: a.mode || (a.apiKey ? 'key' : 'server') });
@@ -66,27 +71,56 @@
     const tplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
     const computeFor = c => P.compute(c.entries, tplOf(c), undefined, { birth: c.birth });
     const adjustmentOf = c => (settings.classAdjustments || []).find(a => a.id === c.adjustmentId) || null;
-    const placementFor = (c, r) => P.placement(r.creditedYears, tplOf(c), adjustmentOf(c), settings.salaryTable);
+    /** Lohneinreihung mit der Gehaltstabelle, die für die Vorlage gilt (fest gewählt oder am Stichtag gültig). */
+    function placementFor(c, r) {
+        const t = tplOf(c);
+        const sel = P.selectSalaryTable(settings.salaryTables, t);
+        const pl = P.placement(r.creditedYears, t, adjustmentOf(c), sel.table);
+        return pl && Object.assign(pl, { table: sel.table, future: sel.future });
+    }
     const chf = v => 'CHF ' + (Math.round(v * 20) / 20).toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const chfExact = v => 'CHF ' + v.toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtDay = d => d ? d.split('-').reverse().join('.') : '';
+    const fmtNum = v => (Math.round(v * 10) / 10).toLocaleString('de-CH', { maximumFractionDigits: 1 });
+    /** Pensum der neuen Stelle in %: aus den Lektionen, wenn die Vorlage Lektionen für 100 % kennt. */
+    function pensumOf(c, t) {
+        if (t.lessonsFull) {
+            const l = c.newLessons ?? t.lessonsFull;
+            return Math.max(0, Math.min(100, l / t.lessonsFull * 100));
+        }
+        return Math.max(0, Math.min(100, +c.newPensum || 100));
+    }
+    const tableLabel = st => `«${st.name}»${st.validFrom ? ', gültig ab ' + fmtDay(st.validFrom) : ''}`;
 
-    /** Lohneinreihung als Text, z. B. «Lohnklasse 12, Stufe 6 · Jahreslohn CHF 95'000.00 (100 %)». */
+    /** Lohneinreihung als Text, z. B. «Lohnklasse 12, Stufe 6 · Jahreslohn CHF 95'000.00 bei 100 % · …». */
     function placementText(c, pl) {
         if (!pl) return '';
+        const t = tplOf(c);
         const parts = [`Lohnklasse ${pl.cls}, Stufe ${pl.stage}`];
         if (pl.salary) {
-            const p = Math.max(0, Math.min(100, +c.newPensum || 100));
+            const p = pensumOf(c, t);
+            const year = pl.salary * p / 100;
+            const other = t.payments === 12 ? 13 : 12;
             parts.push(`Jahreslohn ${chf(pl.salary)} bei 100 %`);
-            if (p !== 100) parts.push(`${chf(pl.salary * p / 100)} bei ${p} %`);
-            parts.push(`Monatslohn (13×) ${chf(pl.salary * p / 100 / 13)}`);
+            if (t.lessonsFull && p !== 100) parts.push(`${chf(year)} bei ${fmtNum(c.newLessons ?? t.lessonsFull)} von ${fmtNum(t.lessonsFull)} Lektionen (${fmtNum(p)} %)`);
+            else if (t.lessonsFull) parts[parts.length - 1] += ` (${fmtNum(t.lessonsFull)} Lektionen)`;
+            else if (p !== 100) parts.push(`${chf(year)} bei ${fmtNum(p)} %`);
+            parts.push(`Monatslohn ${chf(year / t.payments)} (${t.payments} Auszahlungen; bei ${other}: ${chf(year / other)})`);
         }
+        if (t.lessonsFull && pl.lesson) parts.push(`pro Lektion ${chfExact(pl.lesson)}`);
+        else if (pl.hour) parts.push(`pro Stunde ${chfExact(pl.hour)}`);
         return parts.join(' · ');
     }
     function placementWhy(t, pl) {
         if (!pl) return '';
-        let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
+        let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.years + 1 > pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : ''}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
         if (pl.ups) s += `, +${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} nach ${(t.classUpYears || []).slice(0, pl.ups).join(' und ')} Jahren`;
         if (pl.adjustment && pl.adjustment.delta) s += `, Korrektur: ${pl.adjustment.label}`;
-        return s + (settings.salaryTable ? '' : ' (keine Gehaltstabelle hinterlegt)');
+        if (!pl.table) return s + ' (keine Gehaltstabelle hinterlegt)';
+        s += `. Gehaltstabelle ${tableLabel(pl.table)}`;
+        if (pl.future) s += ' – gilt am Stichtag noch nicht, keine gültige Tabelle vorhanden';
+        if (!pl.salary) s += ` – Lohnklasse ${pl.cls} ist darin nicht enthalten`;
+        return s;
     }
 
     function setStatus(msg, isError) {
@@ -368,9 +402,21 @@
         return window.CVTimeline ? CVTimeline.render({ entries: c.entries, perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth, endMonth: r.cutoffMonth }) : '';
     }
 
+    const overrideCount = c => c.entries.filter(e => e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '').length;
+
+    /** Womit gerechnet wurde (für den Bericht): Stand der Einstellungen. */
+    function settingsSourceText() {
+        const now = new Date().toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' });
+        if (ai.shared && shared.enabled && sharedMeta && sharedMeta.version) {
+            return `zentrale Einstellungen Version ${sharedMeta.version}` + (sharedMeta.updatedAt ? ` vom ${new Date(sharedMeta.updatedAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' })}` : '') + `; berechnet am ${now}`;
+        }
+        return `Einstellungen dieses Browsers; berechnet am ${now}`;
+    }
+
     function buildView(c) {
         const r = computeFor(c);
         const t = tplOf(c);
+        const pl = placementFor(c, r);
         const modelName = (window.CVAi?.MODELS.find(m => m.id === c.model) || { name: c.model || 'Claude' }).name.replace(/ \(.*\)$/, '');
         return {
             name: c.name, birth: c.birth, entries: c.entries, result: r, template: t, catName,
@@ -379,8 +425,11 @@
             sourceText: c.source === 'ki' ? `KI-gestützt mit ${modelName} (Anthropic), durch eine Person geprüft` : 'regelbasiert (ohne KI), durch eine Person geprüft',
             rulesText: rulesText(t),
             formulaText: formulaHtml(c, r, t),
-            placementText: placementText(c, placementFor(c, r)),
-            placementWhy: placementWhy(t, placementFor(c, r)),
+            placementText: placementText(c, pl),
+            placementWhy: placementWhy(t, pl),
+            salaryTableText: pl && pl.table ? tableLabel(pl.table) + (pl.future ? ' (am Stichtag noch nicht gültig)' : '') + ` · Monatslohn mit ${t.payments} Auszahlungen` : '',
+            settingsText: settingsSourceText(),
+            overrides: overrideCount(c),
             timeline: timelineHtml(c, r)
         };
     }
@@ -416,7 +465,7 @@
             }
             const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
-                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ' <span class="mini-ai" title="ausgewertet mit Claude">✨</span>' : ''}</td>
+                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ' <span class="mini-ai" title="ausgewertet mit Claude">✨</span>' : ''}${(n => n ? ` <span class="badge badge-manual" title="${n} Anrechnung${n > 1 ? 'en' : ''} manuell angepasst">✎ ${n} manuell</span>` : '')(overrideCount(c))}</td>
                 <td>${esc(tplOf(c).name)}</td>
                 <td class="num">${fmt(r.totalYears)}</td>
                 <td class="num">${fmt(r.targetYears)}</td>
@@ -472,7 +521,9 @@
                 <div class="head-fields">
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
                     <label class="field"><span>Stelle / Vorlage</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
-                    ${t.classMin ? `<label class="field"><span>Pensum neue Stelle</span><div class="suffix"><input type="number" min="1" max="100" data-cf="newPensum" value="${esc(c.newPensum)}"><em>%</em></div></label>
+                    ${t.classMin ? `${t.lessonsFull
+                        ? `<label class="field"><span>Lektionen neue Stelle</span><div class="suffix"><input type="number" min="0.5" max="${esc(t.lessonsFull)}" step="0.5" data-cf="newLessons" value="${esc(c.newLessons ?? t.lessonsFull)}"><em>von ${esc(fmtNum(t.lessonsFull))}</em></div></label>`
+                        : `<label class="field"><span>Pensum neue Stelle</span><div class="suffix"><input type="number" min="1" max="100" data-cf="newPensum" value="${esc(c.newPensum)}"><em>%</em></div></label>`}
                     <label class="field"><span>Korrektur Lohnklasse</span><select data-cf="adjustmentId"><option value="">keine</option>${(settings.classAdjustments || []).map(a => `<option value="${esc(a.id)}"${a.id === c.adjustmentId ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}
                 </div>
             </div>
@@ -587,7 +638,10 @@
         if (!c || c.loading) return;
         const t = e.target;
         if (t.dataset.cf) {
-            c[t.dataset.cf] = t.dataset.cf === 'newPensum' ? Math.max(1, Math.min(100, +t.value || 100)) : t.value;
+            const lessonsFull = tplOf(c).lessonsFull || 0;
+            c[t.dataset.cf] = t.dataset.cf === 'newPensum' ? Math.max(1, Math.min(100, +t.value || 100))
+                : t.dataset.cf === 'newLessons' ? (t.value === '' ? null : Math.max(0.5, Math.min(lessonsFull, +t.value)))
+                : t.value;
             if (t.dataset.cf === 'name') c.autoName = false;
             if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
@@ -652,13 +706,15 @@
     $('#exportCsv').addEventListener('click', () => {
         const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
         const n = y => (Math.round(y * 100) / 100).toFixed(2).replace('.', ',');
-        const lines = [['Person', 'Geburtsdatum', 'Stelle / Vorlage', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre (ungerundet)', 'Anrechenbare Jahre', 'Lohnklasse', 'Lohnstufe', 'Jahreslohn 100 %', 'Pensum neue Stelle %', 'Auswertung'].map(q).join(';')];
+        const lines = [['Person', 'Geburtsdatum', 'Stelle / Vorlage', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre (ungerundet)', 'Anrechenbare Jahre', 'Lohnklasse', 'Lohnstufe', 'Jahreslohn 100 %', 'Pensum neue Stelle %', 'Jahreslohn neue Stelle', 'Monatslohn', 'Gehaltstabelle', 'Manuell angepasste Anrechnungen', 'Auswertung'].map(q).join(';')];
         const details = [['Person', 'Funktion', 'Details', 'Beruf', 'Von', 'Bis', 'Pensum %', 'Angerechnet (ja/nein)', 'Anrechnung %', 'Dauer Jahre', 'Angerechnete Jahre'].map(q).join(';')];
         for (const c of candidates.filter(x => !x.loading)) {
             const r = computeFor(c);
             const pl = placementFor(c, r);
             lines.push([q(c.name), q(c.birth), q(tplOf(c).name), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.exactYears), n(r.creditedYears),
-                pl ? pl.cls : '', pl ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', c.newPensum, q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
+                pl ? pl.cls : '', pl ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', n(pensumOf(c, tplOf(c))),
+                pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100) : '', pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100 / tplOf(c).payments) : '',
+                q(pl && pl.table ? pl.table.name + (pl.table.validFrom ? ' ab ' + fmtDay(pl.table.validFrom) : '') : ''), overrideCount(c), q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
             c.entries.forEach((e, i) => {
                 const pe = r.perEntry[i];
                 details.push([q(c.name), q(e.title), q(e.details), q(catName(e.category)), q(e.start), q(e.ongoing ? 'heute' : e.end), e.pensum,
@@ -691,6 +747,11 @@
         document.querySelectorAll('input[name="aiMode"]').forEach(r => { r.checked = r.value === draftAi.mode; });
         $('#aiKey').value = draftAi.apiKey;
         $('#aiPassword').value = draftAi.password;
+        $('#adminPassword').value = draftAi.adminPassword || '';
+        $('#adminPasswordField').hidden = !shared.adminRequired;
+        $('#sharedEnabled').checked = draftAi.shared !== false;
+        $('#sharedEnabled').disabled = !shared.enabled;
+        $('#sharedStatus').innerHTML = sharedStatusHtml();
         $('#aiTextOnly').checked = draftAi.textOnly;
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
         $('#serverStatus').innerHTML = server.configured
@@ -708,8 +769,23 @@
         draftAi.mode = document.querySelector('input[name="aiMode"]:checked')?.value || 'server';
         draftAi.apiKey = $('#aiKey').value.trim();
         draftAi.password = $('#aiPassword').value;
+        draftAi.adminPassword = $('#adminPassword').value;
+        draftAi.shared = $('#sharedEnabled').checked;
         draftAi.textOnly = $('#aiTextOnly').checked;
         draftAi.model = $('#aiModel').value;
+    }
+
+    function sharedStatusHtml() {
+        if (!shared.available) return '<span class="warn">Kein Server für zentrale Einstellungen gefunden (braucht PHP-Hosting und api/settings.php). Einstellungen werden nur in diesem Browser gespeichert.</span>';
+        if (!shared.enabled) return `<span class="warn">${esc(shared.problem || 'Zentrale Einstellungen sind auf dem Server nicht eingerichtet.')}</span>`;
+        if (draftAi.shared === false) return 'Einstellungen werden nur in diesem Browser gespeichert.';
+        const when = shared.updatedAt ? ' vom ' + new Date(shared.updatedAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' }) : '';
+        let html = shared.exists
+            ? `<span class="ok">✓ Zentrale Einstellungen: Version ${shared.version}${esc(when)}</span>`
+            : '<span class="ok">✓ Server bereit</span> – noch keine zentralen Einstellungen gespeichert. Beim nächsten «Speichern» werden die Einstellungen dieses Browsers für alle übernommen.';
+        if (shared.error) html += `<br><span class="warn">${esc(shared.error)}</span>`;
+        if (shared.adminRequired) html += '<br>Zum Speichern braucht es das Admin-Passwort.';
+        return html;
     }
 
     const numField = (label, key, val, opts) => {
@@ -732,7 +808,9 @@
     }
 
     function renderTemplatesForm(openId) {
-        $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${t.id === openId ? 'open' : ''}>
+        const open = new Set([...document.querySelectorAll('#tplList details[open]')].map(d => d.dataset.tpl));
+        if (openId) open.add(openId);
+        $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${open.has(t.id) ? 'open' : ''}>
             <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${t.classMin ? ` · Lohnklasse ${t.classMin}${t.classMax && t.classMax !== t.classMin ? '–' + t.classMax : ''}` : ''}</span></summary>
             <div class="tpl-body">
                 <div class="grid-2">
@@ -758,6 +836,15 @@
                     ${numField('Lohnklasse von', 'classMin', t.classMin, { unit: 'LK', placeholder: 'keine' })}
                     ${numField('Lohnklasse bis', 'classMax', t.classMax, { unit: 'LK', placeholder: 'keine' })}
                     <label class="field"><span>Klassenaufstieg nach Jahren</span><input type="text" data-t="classUpYears" value="${esc((t.classUpYears || []).join(', '))}" placeholder="z. B. 12, 24"></label>
+                    <label class="field"><span>Gehaltstabelle</span><select data-t="salaryTableId">
+                        <option value="">automatisch (gültig am Stichtag)</option>
+                        ${draft.salaryTables.map(st => `<option value="${esc(st.id)}"${st.id === t.salaryTableId ? ' selected' : ''}>${esc(st.name)}${st.validFrom ? ' ab ' + esc(fmtDay(st.validFrom)) : ''}</option>`).join('')}</select></label>
+                </div>
+                <div class="grid-4">
+                    <label class="field"><span>Monatslohn</span><select data-t="payments">
+                        <option value="13"${t.payments !== 12 ? ' selected' : ''}>13 Auszahlungen</option>
+                        <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
+                    ${numField('Lektionen bei 100 % (optional)', 'lessonsFull', t.lessonsFull, { unit: 'Lekt.', step: 0.5, placeholder: 'Pensum in %' })}
                 </div>
                 <div class="row-gap">
                     <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">Duplizieren</button>
@@ -775,25 +862,60 @@
         </div>`).join('');
     }
 
-    function renderSalaryStatus(openPreview) {
-        const st = draft.salaryTable;
-        const cls = st ? Object.keys(st.classes).map(Number).sort((a, b) => a - b) : [];
-        const stages = st ? Math.max(...cls.map(k => st.classes[k].length)) : 0;
-        const n = v => v == null ? '' : Math.round(v).toLocaleString('de-CH');
-        $('#salaryStatus').innerHTML = st
-            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom.split('-').reverse().join('.')) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]} · ${stages} Stufen${st.note ? ` <br><span class="warn">${esc(st.note)}</span>` : ''}`
-            : 'Keine Gehaltstabelle hinterlegt.';
-        $('#salaryPreview').innerHTML = st ? `<details${openPreview ? ' open' : ''}><summary>Tabelle anzeigen (bitte prüfen)</summary><div class="table-scroll"><table class="table salary-table">
-            <thead><tr><th>LK</th>${Array.from({ length: stages }, (_, i) => `<th class="num">Stufe ${i + 1}</th>`).join('')}</tr></thead>
-            <tbody>${cls.map(k => `<tr><th>${k}</th>${Array.from({ length: stages }, (_, i) => `<td class="num">${n(st.classes[k][i])}</td>`).join('')}</tr>`).join('')}</tbody>
-        </table></div></details>` : '';
-        $('#removeSalary').hidden = !st;
+    const SALARY_KINDS = [{ id: 'classes', name: 'Jahreslohn' }, { id: 'lessons', name: 'pro Lektion' }, { id: 'hours', name: 'pro Stunde' }];
+    const salaryView = {}; // pro Tabelle: welche Werte gerade angezeigt werden
+
+    function salarySummary(st) {
+        const cls = Object.keys(st.classes).map(Number).sort((a, b) => a - b);
+        const stages = Math.max(0, ...cls.map(k => st.classes[k].length));
+        const extra = SALARY_KINDS.slice(1).filter(k => Object.keys(st[k.id] || {}).length).map(k => k.name);
+        const n = P.checkSalaryTable(st).length;
+        return `${st.validFrom ? 'gültig ab ' + esc(fmtDay(st.validFrom)) : 'ohne Gültigkeitsdatum'} · LK ${cls[0]}–${cls[cls.length - 1]} · ${stages} Stufen${extra.length ? ' · ' + extra.join(', ') : ''}`
+            + (n ? ` <span class="badge">⚠ ${n} Hinweis${n > 1 ? 'e' : ''}</span>` : ' <span class="ok">✓ geprüft</span>');
+    }
+    function salaryWarnings(st) {
+        const w = P.checkSalaryTable(st);
+        return w.length ? `<div class="notice"><b>Bitte prüfen:</b><ul>${w.slice(0, 8).map(x => `<li>${esc(x)}</li>`).join('')}${w.length > 8 ? `<li>… und ${w.length - 8} weitere</li>` : ''}</ul></div>` : '';
+    }
+
+    /** Gehaltstabellen im Einstellungsdialog: Übersicht, Prüfung und bearbeitbare Werte. */
+    function renderSalaryList(openId) {
+        const open = new Set([...document.querySelectorAll('#salaryList details[open]')].map(d => d.dataset.st));
+        if (openId) open.add(openId);
+        const sorted = draft.salaryTables.slice().sort((a, b) => (b.validFrom || '').localeCompare(a.validFrom || ''));
+        $('#salaryList').innerHTML = sorted.length ? sorted.map(st => {
+            const cls = Object.keys(st.classes).map(Number).sort((a, b) => a - b);
+            const stages = Math.max(0, ...cls.map(k => st.classes[k].length));
+            const kinds = SALARY_KINDS.filter(k => k.id === 'classes' || Object.keys(st[k.id] || {}).length);
+            const view = kinds.some(k => k.id === salaryView[st.id]) ? salaryView[st.id] : 'classes';
+            const m = st[view] || {};
+            const cell = v => v == null ? '' : Number.isInteger(v) ? String(v) : v.toFixed(2);
+            return `<details class="tpl-item" data-st="${esc(st.id)}" ${open.has(st.id) ? 'open' : ''}>
+                <summary><span class="tpl-name">${esc(st.name)}</span><span class="tpl-target" data-sum>${salarySummary(st)}</span></summary>
+                <div class="tpl-body">
+                    <div class="grid-2">
+                        <label class="field"><span>Bezeichnung</span><input type="text" data-sf="name" value="${esc(st.name)}"></label>
+                        <label class="field"><span>Gültig ab (leer = immer)</span><input type="date" data-sf="validFrom" value="${esc(st.validFrom || '')}"></label>
+                    </div>
+                    ${st.note ? `<p class="hint">${esc(st.note)}</p>` : ''}
+                    <div data-warn>${salaryWarnings(st)}</div>
+                    <div class="salary-row">
+                        ${kinds.length > 1 ? `<label class="field inline"><span>Anzeigen</span><select data-sview>${kinds.map(k => `<option value="${k.id}"${k.id === view ? ' selected' : ''}>${k.name}</option>`).join('')}</select></label>` : '<span></span>'}
+                        <button class="btn btn-ghost btn-sm" type="button" data-delst="${esc(st.id)}">Tabelle löschen</button>
+                    </div>
+                    <div class="table-scroll"><table class="table salary-table">
+                        <thead><tr><th>LK</th>${Array.from({ length: stages }, (_, i) => `<th class="num">Stufe ${i + 1}</th>`).join('')}</tr></thead>
+                        <tbody>${cls.map(k => `<tr><th>${k}</th>${Array.from({ length: stages }, (_, i) => `<td><input type="text" inputmode="decimal" class="cell" data-cell data-kind="${view}" data-cls="${k}" data-i="${i}" value="${esc(cell(m[k] ? m[k][i] : null))}" aria-label="LK ${k} Stufe ${i + 1}"></td>`).join('')}</tr>`).join('')}</tbody>
+                    </table></div>
+                </div>
+            </details>`;
+        }).join('') : '<p class="hint">Keine Gehaltstabelle hinterlegt.</p>';
     }
 
     function renderSettingsForm(openTplId) {
         renderTemplatesForm(openTplId);
         renderCatsForm();
-        renderSalaryStatus();
+        renderSalaryList();
     }
 
     function readSettingsForm() {
@@ -823,12 +945,97 @@
             t.classMax = optNum('classMax');
             if (t.classMin && t.classMax && t.classMax < t.classMin) t.classMax = t.classMin;
             t.classUpYears = v('classUpYears').split(/[,; ]+/).map(Number).filter(n => n > 0).sort((a, b) => a - b);
+            t.salaryTableId = v('salaryTableId');
+            t.payments = +v('payments') === 12 ? 12 : 13;
+            t.lessonsFull = optNum('lessonsFull');
             t.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel).filter(r => r !== t.target);
         });
+        document.querySelectorAll('#salaryList [data-st]').forEach(item => {
+            const st = draft.salaryTables.find(x => x.id === item.dataset.st);
+            if (!st) return;
+            st.name = item.querySelector('[data-sf="name"]').value.trim() || 'Gehaltstabelle';
+            const d = item.querySelector('[data-sf="validFrom"]').value;
+            st.validFrom = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+        });
+    }
+
+    // --- Zentrale Einstellungen (api/settings.php) ---
+    async function sharedRequest(method, body, password, adminPassword) {
+        const headers = { 'x-app-password': password || '' };
+        if (adminPassword) headers['x-admin-password'] = adminPassword;
+        if (body) headers['content-type'] = 'application/json';
+        const res = await fetch(SETTINGS_URL, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+        let data = null;
+        try { data = await res.json(); } catch (e) { /* keine JSON-Antwort */ }
+        return { status: res.status, data: data || {} };
+    }
+    async function checkShared() {
+        try {
+            const res = await fetch(SETTINGS_URL + '?action=status', { cache: 'no-store' });
+            const d = res.ok ? await res.json() : null;
+            shared = d ? Object.assign(shared, { available: true, enabled: !!d.enabled, exists: !!d.exists, version: d.version || 0, updatedAt: d.updatedAt, adminRequired: !!d.adminRequired, problem: d.problem || '' })
+                : Object.assign(shared, { available: false, enabled: false });
+        } catch (e) {
+            shared.available = shared.enabled = false; // z. B. Hosting ohne PHP oder offline
+        }
+    }
+    function rememberShared(version, updatedAt) {
+        sharedMeta = { version, updatedAt };
+        storageSet(SHARED_KEY, JSON.stringify(sharedMeta));
+        Object.assign(shared, { exists: true, version, updatedAt, error: '' });
+    }
+    /** Lädt die zentralen Einstellungen, wenn es eine neuere Version gibt. Gibt true zurück, wenn sich etwas geändert hat. */
+    async function pullShared(force) {
+        await checkShared();
+        if (!shared.enabled || !shared.exists || ai.shared === false) return false;
+        if (!ai.password) { shared.error = 'Für die zentralen Einstellungen fehlt das Zugangspasswort.'; return false; }
+        if (!force && sharedMeta && sharedMeta.version === shared.version && sharedMeta.updatedAt === shared.updatedAt) return false;
+        const { status, data } = await sharedRequest('GET', null, ai.password);
+        if (status !== 200 || !data.settings) { shared.error = data.error || `Zentrale Einstellungen konnten nicht geladen werden (${status}).`; return false; }
+        const n = P.normalizeSettings(data.settings);
+        if (!n.templates.length) { shared.error = 'Die zentralen Einstellungen sind unvollständig.'; return false; }
+        settings = n;
+        saveSettings();
+        rememberShared(data.version, data.updatedAt);
+        return true;
+    }
+    /** Speichert die Einstellungen zentral. Bei einem Konflikt wird nachgefragt. */
+    async function pushShared() {
+        if (!shared.enabled || ai.shared === false) return;
+        if (!ai.password) { setStatus('Nur in diesem Browser gespeichert: Für die zentralen Einstellungen fehlt das Zugangspasswort.', true); return; }
+        await checkShared();
+        if (!shared.enabled) return;
+        let base = sharedMeta ? sharedMeta.version : 0;
+        if (shared.exists && !(sharedMeta && sharedMeta.version)) {
+            // Dieser Browser hat die zentralen Einstellungen noch nie geladen
+            if (confirm(`Auf dem Server gibt es bereits zentrale Einstellungen (Version ${shared.version}).\n\nOK = die zentralen Einstellungen übernehmen (die Änderungen in diesem Browser werden verworfen)\nAbbrechen = die Einstellungen dieses Browsers für alle speichern`)) {
+                if (await pullShared(true)) { render(); setStatus(`Zentrale Einstellungen übernommen (Version ${sharedMeta.version}).`); }
+                else setStatus(shared.error || 'Zentrale Einstellungen konnten nicht geladen werden.', true);
+                return;
+            }
+            base = shared.version;
+        }
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const { status, data } = await sharedRequest('POST', { baseVersion: base, settings }, ai.password, ai.adminPassword);
+            if (status === 200) {
+                rememberShared(data.version, data.updatedAt);
+                setStatus(`Einstellungen zentral gespeichert (Version ${data.version}).`);
+                return;
+            }
+            if (status === 409 && attempt === 0 && confirm(`Die zentralen Einstellungen wurden inzwischen von jemand anderem geändert (Version ${data.version}).\n\nOK = deine Einstellungen trotzdem speichern (überschreibt die andere Version; sie bleibt im Verlauf auf dem Server)\nAbbrechen = nicht zentral speichern`)) {
+                base = data.version;
+                continue;
+            }
+            shared.error = data.error || `Fehler ${status}`;
+            setStatus('Nur in diesem Browser gespeichert – zentral nicht gespeichert: ' + shared.error, true);
+            return;
+        }
     }
 
     /** Öffnet die Einstellungen; mit tplId wird diese Vorlage aufgeklappt und angezeigt. */
     async function openSettings(tplId) {
+        // Vorher die neueste zentrale Version holen, damit niemand auf einem alten Stand weiterarbeitet
+        if (await pullShared().catch(() => false)) render();
         draft = clone(settings);
         draftAi = clone(ai);
         renderAiForm();
@@ -911,25 +1118,27 @@
         e.target.value = '';
         if (!f) return;
         const isPdf = /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
-        const name = f.name.replace(/\.[^.]+$/, '');
-        const status = $('#salaryStatus');
-        const before = status.innerHTML;
-        status.textContent = 'Gehaltstabelle wird gelesen …';
+        const name = f.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+        const label = e.target.closest('label');
+        const setBusy = text => { label.firstChild.textContent = text; };
+        setBusy('Gehaltstabelle wird gelesen …');
         readAiForm();
+        readSettingsForm();
         try {
             const buf = await f.arrayBuffer();
             let st = null, readErr = null;
             try { st = P.parseSalaryTable(await readTableFile(f, buf), name); } catch (err) { readErr = err; }
             if (!st && isPdf && window.CVAi && draftAiReady()) {
-                status.textContent = 'Tabelle nicht direkt lesbar – Claude liest die Gehaltstabelle …';
+                setBusy('Claude liest die Gehaltstabelle …');
                 const res = await window.CVAi.readSalaryTable(Object.assign(
                     { model: draftAi.model, pdfBase64: toBase64(buf) },
                     draftAi.mode === 'server' ? { serverUrl: SERVER_URL, password: draftAi.password } : { apiKey: draftAi.apiKey }
                 ));
-                if (Object.keys(res.classes).length) st = { name: res.name || name, validFrom: res.validFrom, classes: res.classes, monthly: res.monthly, note: res.note };
+                if (Object.keys(res.classes).length) {
+                    st = Object.assign(P.normalizeSalaryTable({ name: res.name || name, validFrom: res.validFrom, classes: res.classes, note: ['von Claude gelesen', res.note].filter(Boolean).join(' · ') }), { monthly: res.monthly });
+                }
             }
             if (!st) {
-                status.innerHTML = before;
                 if (readErr) throw readErr;
                 alert('In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.'
                     + (isPdf && !draftAiReady() ? '\n\nBei eingescannten oder ungewöhnlich aufgebauten PDFs hilft die KI-Auswertung mit Claude (oben in den Einstellungen einrichten).' : ''));
@@ -940,19 +1149,61 @@
                 st.note = [st.note, 'Monatslöhne × 13 umgerechnet'].filter(Boolean).join(' · ');
             }
             delete st.monthly;
-            readSettingsForm();
-            draft.salaryTable = st;
-            renderSalaryStatus(true);
+            // Gleiche Gültigkeit wie eine vorhandene Tabelle → ersetzen (Vorlagen, die sie fest gewählt haben, behalten die Wahl)
+            const same = st.validFrom && draft.salaryTables.find(x => x.validFrom === st.validFrom);
+            if (same && confirm(`Es gibt bereits eine Gehaltstabelle gültig ab ${fmtDay(st.validFrom)} («${same.name}»). Ersetzen?\n\nAbbrechen = als zusätzliche Tabelle hinzufügen`)) {
+                st.id = same.id;
+                draft.salaryTables[draft.salaryTables.indexOf(same)] = st;
+            } else {
+                draft.salaryTables.push(st);
+            }
+            renderSalaryList(st.id);
+            renderTemplatesForm();
+            document.querySelector(`#salaryList [data-st="${CSS.escape(st.id)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
         } catch (err) {
-            status.innerHTML = before;
             alert('Die Datei konnte nicht gelesen werden: ' + err.message);
+        } finally {
+            setBusy('+ Gehaltstabelle hochladen');
         }
     });
-    $('#removeSalary').addEventListener('click', () => {
-        if (!confirm('Gehaltstabelle entfernen?')) return;
+    $('#salaryList').addEventListener('click', e => {
+        const del = e.target.closest('[data-delst]');
+        if (!del) return;
         readSettingsForm();
-        draft.salaryTable = null;
-        renderSalaryStatus();
+        const st = draft.salaryTables.find(x => x.id === del.dataset.delst);
+        const used = draft.templates.filter(t => t.salaryTableId === st.id);
+        if (!confirm(`Gehaltstabelle «${st.name}» löschen?` + (used.length ? `\n\nDiese Vorlagen verwenden sie fest und nehmen danach automatisch die am Stichtag gültige: ${used.map(t => t.name).join(', ')}` : ''))) return;
+        draft.salaryTables = draft.salaryTables.filter(x => x !== st);
+        used.forEach(t => { t.salaryTableId = ''; });
+        renderSalaryList();
+        renderTemplatesForm();
+    });
+    $('#salaryList').addEventListener('change', e => {
+        const item = e.target.closest('[data-st]');
+        if (!item) return;
+        const st = draft.salaryTables.find(x => x.id === item.dataset.st);
+        if (e.target.matches('[data-sview]')) {
+            salaryView[st.id] = e.target.value;
+            renderSalaryList();
+        } else if (e.target.matches('[data-cell]')) {
+            // Korrigierter Wert; nur die letzte Stufe einer Zeile kann geleert (entfernt) werden
+            const { kind, cls, i } = e.target.dataset;
+            const m = st[kind] || (st[kind] = {});
+            const row = m[cls] || (m[cls] = []);
+            const v = P.parseAmount(e.target.value);
+            if (e.target.value.trim() === '' && +i === row.length - 1) row.pop();
+            else if (v !== null && v > 0) row[+i] = v;
+            else alert(e.target.value.trim() === '' ? 'Nur die letzte Stufe einer Zeile kann entfernt werden.' : 'Bitte eine Zahl eingeben, z. B. 82160.95');
+            if (!row.length) delete m[cls];
+            e.target.value = row[+i] == null ? '' : Number.isInteger(row[+i]) ? String(row[+i]) : row[+i].toFixed(2);
+            item.querySelector('[data-warn]').innerHTML = salaryWarnings(st);
+            item.querySelector('[data-sum]').innerHTML = salarySummary(st);
+        } else if (e.target.dataset.sf) {
+            readSettingsForm();
+            item.querySelector('.tpl-name').textContent = st.name;
+            item.querySelector('[data-sum]').innerHTML = salarySummary(st);
+            renderTemplatesForm();
+        }
     });
     $('#addCat').addEventListener('click', () => {
         readSettingsForm();
@@ -977,7 +1228,8 @@
     });
     $('#resetSettings').addEventListener('click', () => {
         if (!confirm('Berufe und Vorlagen auf den Standard zurücksetzen?')) return;
-        draft = clone(P.DEFAULT_SETTINGS);
+        readSettingsForm();
+        draft = Object.assign(clone(P.DEFAULT_SETTINGS), { salaryTables: draft.salaryTables });
         renderSettingsForm();
     });
     $('#exportSettings').addEventListener('click', () => {
@@ -997,7 +1249,7 @@
             alert('Die Datei enthält keine gültigen Einstellungen.');
         }
     });
-    $('#settingsDialog').addEventListener('close', () => {
+    $('#settingsDialog').addEventListener('close', async () => {
         if ($('#settingsDialog').returnValue !== 'save') return;
         readSettingsForm();
         readAiForm();
@@ -1005,6 +1257,7 @@
         saveSettings();
         ai = draftAi;
         storageSet(AI_KEY, JSON.stringify(ai));
+        pushShared().catch(err => setStatus('Nur in diesem Browser gespeichert – Server nicht erreichbar: ' + err.message, true));
         if (ai.enabled && !aiReady()) setStatus(ai.mode === 'server' ? 'KI-Auswertung ist eingeschaltet, aber der Server ist nicht eingerichtet.' : 'KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
         const ids = new Set(allCats().map(c => c.id));
         for (const c of candidates) {
@@ -1037,5 +1290,9 @@ Deutsch, Englisch`;
     render();
     // Beim Laden prüfen, ob ein eingerichteter Server vorhanden ist (sobald das KI-Modul geladen ist)
     const initServer = async () => { server = await CVAi.checkServer(SERVER_URL); render(); };
+    pullShared().then(changed => {
+        if (changed) { render(); setStatus(`Zentrale Einstellungen geladen (Version ${sharedMeta.version}).`); }
+        else if (shared.error) setStatus(shared.error, true);
+    }).catch(() => {});
     if (window.CVAi) initServer(); else window.addEventListener('cvai-ready', initServer, { once: true });
 })();

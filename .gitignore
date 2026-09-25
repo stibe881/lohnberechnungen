@@ -6,3 +6,7 @@ api/config.php
 *settings*.json
 
 .DS_Store
+
+# Zentrale Einstellungen auf dem Server (werden von api/settings.php geschrieben)
+api/data/*
+!api/data/.htaccess

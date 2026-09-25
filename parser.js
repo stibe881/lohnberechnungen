@@ -177,7 +177,10 @@
             cutoff: 'today',       // 'today' | 'yearEnd' (Stichtag 31.12. des laufenden Jahres)
             classMin: null,        // Lohneinreihung (optional): tiefste/höchste Lohnklasse der Funktion
             classMax: null,
-            classUpYears: [12, 24] // Aufstieg in die nächste Lohnklasse nach so vielen Jahren
+            classUpYears: [12, 24], // Aufstieg in die nächste Lohnklasse nach so vielen Jahren
+            salaryTableId: '',     // '' = Gehaltstabelle automatisch nach Stichtag, sonst ID einer Tabelle
+            payments: 13,          // Anzahl Monatslöhne pro Jahr (13 oder 12)
+            lessonsFull: null      // Lektionen pro Woche bei 100 % (optional; Pensum dann in Lektionen)
         };
     }
 
@@ -198,6 +201,7 @@
             out.rules = Object.assign({}, base, t.rules);
         }
         if (!Array.isArray(out.classUpYears)) out.classUpYears = [12, 24];
+        if (out.payments !== 12) out.payments = 13;
         return out;
     }
 
@@ -216,7 +220,7 @@
 
     /** Ergänzt fehlende Felder und übernimmt Einstellungen aus älteren Versionen (globale Faktoren, «verwandt» je Beruf). */
     function normalizeSettings(s) {
-        const out = { categories: [], templates: [], classAdjustments: [], salaryTable: null };
+        const out = { categories: [], templates: [], classAdjustments: [], salaryTables: [] };
         out.categories = (s.categories || []).map(c => ({ id: c.id, name: c.name, keywords: c.keywords || [] }));
         if (Array.isArray(s.templates) && s.templates.length) {
             out.templates = s.templates.map(upgradeTemplate);
@@ -233,8 +237,59 @@
         out.templates.forEach(t => { t.related = (t.related || []).filter(r => ids.has(r)); });
         out.templates = out.templates.filter(t => targets.has(t.target));
         out.classAdjustments = Array.isArray(s.classAdjustments) ? s.classAdjustments : DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
-        if (s.salaryTable && s.salaryTable.classes) out.salaryTable = s.salaryTable;
+        const tables = Array.isArray(s.salaryTables) ? s.salaryTables : s.salaryTable ? [s.salaryTable] : [];
+        out.salaryTables = tables.filter(t => t && t.classes && Object.keys(t.classes).length).map(normalizeSalaryTable);
+        const tableIds = new Set(out.salaryTables.map(t => t.id));
+        out.templates.forEach(t => { if (t.salaryTableId && !tableIds.has(t.salaryTableId)) t.salaryTableId = ''; });
         return out;
+    }
+
+    const newTableId = () => 'g_' + Math.random().toString(36).slice(2, 9);
+
+    /** Gehaltstabelle mit allen Feldern: {id, name, validFrom, classes, lessons, hours, note} */
+    function normalizeSalaryTable(t) {
+        const map = m => {
+            const out = {};
+            for (const [k, v] of Object.entries(m || {})) if (Array.isArray(v) && v.length) out[k] = v.map(Number);
+            return out;
+        };
+        return {
+            id: t.id || newTableId(),
+            name: t.name || 'Gehaltstabelle',
+            validFrom: /^\d{4}-\d{2}-\d{2}$/.test(t.validFrom || '') ? t.validFrom : null,
+            classes: map(t.classes),
+            lessons: map(t.lessons),
+            hours: map(t.hours),
+            note: t.note || ''
+        };
+    }
+
+    /** Stichtag einer Vorlage als 'YYYY-MM-DD' (heute oder 31.12. des laufenden Jahres). */
+    function cutoffDate(tpl, today) {
+        today = today || new Date();
+        const y = today.getFullYear();
+        if (tpl.cutoff === 'yearEnd') return y + '-12-31';
+        return y + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    }
+
+    /**
+     * Gehaltstabelle für eine Vorlage: die fest gewählte oder die am Stichtag gültige
+     * (jüngstes «gültig ab» bis zum Stichtag; Tabellen ohne Datum gelten immer).
+     * Gilt am Stichtag noch keine, wird die früheste genommen (future = true).
+     * @returns {{table: object|null, future: boolean}}
+     */
+    function selectSalaryTable(tables, tpl, today) {
+        tables = tables || [];
+        if (!tables.length) return { table: null, future: false };
+        if (tpl.salaryTableId) {
+            const t = tables.find(x => x.id === tpl.salaryTableId);
+            if (t) return { table: t, future: false };
+        }
+        const day = cutoffDate(tpl, today);
+        const key = t => t.validFrom || '0000-00-00';
+        const valid = tables.filter(t => key(t) <= day).sort((a, b) => key(b).localeCompare(key(a)));
+        if (valid.length) return { table: valid[0], future: false };
+        return { table: tables.slice().sort((a, b) => key(a).localeCompare(key(b)))[0], future: true };
     }
 
     const DEFAULT_ADJUSTMENTS = [
@@ -509,9 +564,9 @@
 
     /**
      * Lohneinreihung aus den anrechenbaren Jahren: Start in der tiefsten Lohnklasse der Funktion,
-     * pro Erfahrungsjahr eine Lohnstufe (max. 10), Aufstieg in die nächste Klasse nach den Jahren in
+     * pro Erfahrungsjahr eine Lohnstufe (höchstens so viele, wie die Gehaltstabelle hat, ohne Tabelle 10), Aufstieg in die nächste Klasse nach den Jahren in
      * classUpYears (bis zur höchsten Klasse der Funktion), danach Korrektur (z. B. −1 ohne Ausbildung).
-     * @returns {null | {years, cls, stage, baseCls, ups, adjustment, salary}}
+     * @returns {null | {years, cls, stage, maxStage, baseCls, ups, adjustment, salary, lesson, hour}}
      */
     function placement(years, tpl, adjustment, salaryTable) {
         if (!tpl.classMin) return null;
@@ -522,9 +577,14 @@
         const adj = adjustment || { delta: 0, cap: null };
         cls += adj.delta || 0;
         if (adj.cap && adj.delta > 0) cls = Math.min(cls, adj.cap);
-        const stage = Math.min(10, y + 1);
         const row = salaryTable && salaryTable.classes ? salaryTable.classes[cls] : null;
-        return { years: y, cls, stage, baseCls: tpl.classMin, ups, adjustment: adj, salary: row ? row[stage - 1] : null };
+        const maxStage = row ? row.length : salaryTable && salaryTable.classes && Object.keys(salaryTable.classes).length
+            ? Math.max(...Object.values(salaryTable.classes).map(r => r.length)) : 10;
+        const stage = Math.min(maxStage, y + 1);
+        const pick = m => m && m[cls] && m[cls][stage - 1] != null ? m[cls][stage - 1] : null;
+        return { years: y, cls, stage, maxStage, baseCls: tpl.classMin, ups, adjustment: adj,
+            salary: row && row[stage - 1] != null ? row[stage - 1] : null,
+            lesson: pick(salaryTable && salaryTable.lessons), hour: pick(salaryTable && salaryTable.hours) };
     }
 
     /** Zahl aus einer Tabellenzelle: 85432, «85'432.50», «CHF 85 432», «85.432,50». Sonst null. */
@@ -572,29 +632,39 @@
     const CLASS_LABEL = /^\s*(?:lohnklasse|lk|klasse)?\s*(\d{1,2})\s*$/i;
 
     const ANNUAL_LABEL = /jahres/i;
+    const LESSON_LABEL = /lektion/i;
+    const HOUR_LABEL = /stunde/i;
     const OTHER_LABEL = /monat|auszahl|auzahl|zahlung|stunde|lektion|tag|woche|zulage|%/i;
 
     /**
      * Zeilen mit Lohnklasse in der ersten Zelle und Löhnen danach → {klasse: [Stufe 1, 2, …]}.
      * Hat eine Klasse mehrere Zeilen (Jahreslohn, Monatslohn, pro Stunde …), zählt «Jahreslohn»;
-     * Zeilen mit anderer Bezeichnung (z. B. «13 Auszahlungen», «pro Stunde») werden übersprungen.
+     * Zeilen «pro Lektion» / «pro Stunde» (auch ohne Klassennummer direkt darunter) werden separat
+     * gesammelt, andere (z. B. «13 Auszahlungen») übersprungen.
      */
     function salaryRows(rows) {
-        const classes = {}, annual = {};
+        const classes = {}, annual = {}, lessons = {}, hours = {};
+        let current = null;
         for (const row of rows) {
             const m = CLASS_LABEL.exec(String(row[0] ?? ''));
-            if (!m) continue;
-            const rest = row.slice(1);
+            const rest = m ? row.slice(1) : row;
             const label = rest.filter(c => String(c ?? '').trim() !== '' && parseAmount(c) === null).join(' ');
-            if (OTHER_LABEL.test(label)) continue;
             const values = rest.map(parseAmount).filter(n => n !== null && n > 0);
-            if (!values.length || values.some(n => n < 100)) continue;
-            const cls = +m[1], isAnnual = ANNUAL_LABEL.test(label);
-            if (classes[cls] && (annual[cls] || !isAnnual)) continue;
-            classes[cls] = values.map(n => Math.round(n * 100) / 100);
-            annual[cls] = isAnnual;
+            if (m && !OTHER_LABEL.test(label)) current = +m[1];
+            else if (!m && !label) { current = null; continue; }
+            if (current === null || !values.length) continue;
+            if (LESSON_LABEL.test(label)) { if (!lessons[current]) lessons[current] = values; continue; }
+            if (HOUR_LABEL.test(label)) { if (!hours[current]) hours[current] = values; continue; }
+            if (!m || OTHER_LABEL.test(label)) continue;
+            if (values.some(n => n < 100)) continue;
+            const isAnnual = ANNUAL_LABEL.test(label);
+            if (classes[current] && (annual[current] || !isAnnual)) continue;
+            classes[current] = values.map(n => Math.round(n * 100) / 100);
+            annual[current] = isAnnual;
         }
-        return classes;
+        for (const k of Object.keys(lessons)) if (!classes[k]) delete lessons[k];
+        for (const k of Object.keys(hours)) if (!classes[k]) delete hours[k];
+        return { classes, lessons, hours };
     }
 
     /**
@@ -602,19 +672,20 @@
      * (erste Zelle z. B. «12» oder «LK 12»), danach die Jahreslöhne der Stufen 1, 2, 3 …
      * Kopf- und Leerzeilen werden übersprungen. Stehen die Stufen in den Zeilen («Stufe 1», …)
      * oder die Lohnklassen im Kopf («LK 1», «LK 2», …), wird die Tabelle gedreht.
-     * @returns {{name, validFrom, classes: {[cls]: number[]}, monthly: boolean} | null}
+     * @returns {{id, name, validFrom, classes, lessons, hours, note, monthly: boolean} | null}
      */
     function parseSalaryTable(rows, name) {
         rows = (rows || []).map(r => Array.isArray(r) ? r : []);
         const stageRows = rows.filter(r => /^\s*stufe\s*\d+\s*$/i.test(String(r[0] ?? ''))).length;
         const classHeader = rows.some(r => r.slice(1).filter(c => /^\s*(?:lohnklasse|lk|klasse)\s*\d{1,2}\s*$/i.test(String(c ?? ''))).length >= 2);
-        let classes;
+        let parsed;
         if (stageRows >= 2 || classHeader) {
             const width = Math.max(0, ...rows.map(r => r.length));
-            classes = salaryRows(Array.from({ length: width }, (_, j) => rows.map(r => r[j] ?? '')));
+            parsed = salaryRows(Array.from({ length: width }, (_, j) => rows.map(r => r[j] ?? '')));
         } else {
-            classes = salaryRows(rows);
+            parsed = salaryRows(rows);
         }
+        const classes = parsed.classes;
         const all = Object.values(classes).flat().sort((a, b) => a - b);
         if (!all.length) return null;
         // Löhne unter 20'000 sind kaum Jahreslöhne → vermutlich Monatslöhne
@@ -622,7 +693,39 @@
         // «Stand: 01.01.2026» oder «gültig ab 1.1.2026» → Gültigkeitsbeginn
         const date = /(?:stand|gültig\s+ab|gültig\s+per|per)\s*:?\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/i.exec(rows.map(r => r.join(' ')).join('\n'));
         const validFrom = date ? `${date[3]}-${date[2].padStart(2, '0')}-${date[1].padStart(2, '0')}` : null;
-        return { name: name || 'Gehaltstabelle', validFrom, classes, monthly };
+        return Object.assign(normalizeSalaryTable({ name, validFrom, classes, lessons: parsed.lessons, hours: parsed.hours }), { monthly });
+    }
+
+    /**
+     * Plausibilitätsprüfung einer Gehaltstabelle (findet Lesefehler, z. B. aus PDFs).
+     * @returns {string[]} Warnungen, leer wenn alles plausibel ist
+     */
+    function checkSalaryTable(t) {
+        const out = [];
+        const cls = Object.keys(t.classes || {}).map(Number).sort((a, b) => a - b);
+        if (!cls.length) return ['Die Tabelle enthält keine Lohnklassen.'];
+        const missing = [];
+        for (let k = cls[0]; k <= cls[cls.length - 1]; k++) if (!t.classes[k]) missing.push(k);
+        if (missing.length) out.push(`Lohnklasse${missing.length > 1 ? 'n' : ''} ${missing.join(', ')} fehl${missing.length > 1 ? 'en' : 't'}.`);
+        const lengths = cls.map(k => t.classes[k].length);
+        const common = lengths.slice().sort((a, b) => lengths.filter(x => x === b).length - lengths.filter(x => x === a).length)[0];
+        cls.forEach(k => { if (t.classes[k].length !== common) out.push(`LK ${k} hat ${t.classes[k].length} Stufen, die übrigen ${common}.`); });
+        const rising = (label, m) => {
+            for (const k of Object.keys(m || {}).map(Number).sort((a, b) => a - b)) {
+                const row = m[k];
+                for (let i = 1; i < row.length; i++) {
+                    if (!(row[i] > row[i - 1])) { out.push(`LK ${k}${label}: Stufe ${i + 1} (${row[i]}) ist nicht höher als Stufe ${i} (${row[i - 1]}).`); break; }
+                }
+            }
+        };
+        rising('', t.classes);
+        rising(' pro Lektion', t.lessons);
+        rising(' pro Stunde', t.hours);
+        for (let i = 1; i < cls.length; i++) {
+            const a = t.classes[cls[i - 1]][0], b = t.classes[cls[i]][0];
+            if (cls[i] === cls[i - 1] + 1 && !(b > a)) out.push(`LK ${cls[i]} Stufe 1 ist nicht höher als LK ${cls[i - 1]} Stufe 1.`);
+        }
+        return out;
     }
 
     const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;
@@ -639,9 +742,9 @@
     DEFAULT_SETTINGS.templates = DEFAULT_SETTINGS.categories.map(c => Object.assign(makeTemplate(c.id, c.name), { id: 't_' + c.id }));
 
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
-    DEFAULT_SETTINGS.salaryTable = null;
+    DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

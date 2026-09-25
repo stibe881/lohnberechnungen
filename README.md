@@ -15,7 +15,9 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Mehrere Lebensläufe gleichzeitig** hochladen: Mit Claude werden je 3 parallel ausgewertet.
 - **Vorlagen (Stellen):** Pro Stelle eigene Anrechnungsregeln, z. B. nach Lohnreglement (siehe «Berechnung»).
 - **Zeitstrahl** pro Person: Stellen nach Faktor eingefärbt, Lücken ab 3 Monaten schraffiert, Mindestalter als Linie.
-- **Bericht (PDF)** pro Person oder für alle: Regeln, Rechenweg, Zeitstrahl, Stellenliste und Unterschriftenfeld «Geprüft durch». Öffnet den Druckdialog, dort «Als PDF speichern» wählen.
+- **Bericht (PDF)** pro Person oder für alle: Regeln, Rechenweg, Zeitstrahl, Stellenliste und Unterschriftenfeld «Geprüft durch». Hält fest, womit gerechnet wurde: verwendete Gehaltstabelle mit Gültigkeit, Version der zentralen Einstellungen und Zeitpunkt der Berechnung. Öffnet den Druckdialog, dort «Als PDF speichern» wählen.
+- **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «✎ manuell» markiert, im Bericht vermerkt und im CSV gezählt.
+- **Zentrale Einstellungen:** Vorlagen, Berufe und Gehaltstabellen liegen auf dem Server, alle Nutzenden rechnen mit demselben Stand (siehe «Server einrichten»).
 - **CSV-Export** der Übersicht und aller Stellen.
 
 ## KI-Auswertung mit Claude (optional)
@@ -41,6 +43,16 @@ Voraussetzung: Webhosting mit PHP 7.4+ und der cURL-Erweiterung (bei Schweizer H
 3. In der App unter «Einstellungen» die Option «Über euren Server» wählen und das Passwort eingeben. Der Status zeigt «Server ist eingerichtet».
 
 Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei falscher Eingabe), nur `POST /v1/messages`, nur freigegebene Modelle, Grössenlimit. `config.php` ist per `.htaccess` gesperrt und steht in `.gitignore`.
+
+### Zentrale Einstellungen
+
+Mit `api/settings.php` speichert die App Vorlagen, Berufe und Gehaltstabellen auf dem Server. Dafür reicht eine `config.php` mit Zugangspasswort (ein API-Schlüssel ist dafür nicht nötig).
+
+- In der App unter «Einstellungen → Server und Zugang» das Zugangspasswort eingeben und speichern. Beim ersten Speichern werden die Einstellungen dieses Browsers für alle übernommen. Browser, die schon zentrale Einstellungen vorfinden, fragen, ob sie diese übernehmen sollen.
+- Beim Start und beim Öffnen der Einstellungen lädt die App automatisch die neueste Version. Hat jemand anderes inzwischen gespeichert, fragt die App vor dem Überschreiben nach.
+- Optional `admin_password` in `config.php`: Dann können alle mit Zugangspasswort rechnen, speichern kann aber nur, wer auch das Admin-Passwort kennt.
+- Die Daten liegen in `api/data/` (per `.htaccess` gesperrt, nicht im Git). Die letzten 30 Versionen bleiben in `api/data/history/` erhalten (`keep_versions` in `config.php`). Der Ordner muss für PHP beschreibbar sein; die App legt ihn selbst an.
+- API-Schlüssel und Passwörter werden nie zentral gespeichert.
 
 ## Berechnung
 
@@ -74,12 +86,20 @@ Ablauf: Monat für Monat wird die Anrechnung bestimmt, danach folgen Mindestalte
 ### Lohneinreihung
 
 Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
-- **Lohnstufe:** volle anrechenbare Jahre + 1, höchstens Stufe 10.
+- **Lohnstufe:** volle anrechenbare Jahre + 1, höchstens die letzte Stufe der Gehaltstabelle (ohne Tabelle Stufe 10).
 - **Lohnklasse:** tiefste Klasse der Funktion, +1 nach jeder Jahresgrenze (z. B. 12 und 24 Jahre), höchstens bis zur obersten Klasse der Funktion.
 - **Korrektur:** pro Person wählbar, z. B. −1 Klasse bei fehlender Ausbildung oder +1 mit Obergrenze.
-- **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn (13×).
+- **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn. Pro Vorlage einstellbar: 13 oder 12 Auszahlungen (der andere Betrag steht zum Vergleich daneben).
+- **Lektionen:** Ist in der Vorlage «Lektionen bei 100 %» gesetzt (z. B. 28), wird für die neue Stelle die Anzahl Lektionen eingegeben; das Pensum ergibt sich daraus. Enthält die Gehaltstabelle «pro Lektion» (sonst «pro Stunde»), steht der Ansatz im Lohnvorschlag.
 
-Die **Gehaltstabelle** wird unter Einstellungen → Gehaltstabelle als PDF-, Excel- oder CSV-Datei hochgeladen: eine Zeile pro Lohnklasse, in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … bei 100 %. Überschriften werden übersprungen. Hat eine Klasse mehrere Zeilen (Jahreslohn, 13/12 Auszahlungen, pro Stunde …), zählt die Zeile «Jahreslohn». Tabellen mit Stufen als Zeilen werden gedreht, Monatslöhne auf Wunsch × 13 umgerechnet, «Stand: TT.MM.JJJJ» wird als Gültigkeitsdatum übernommen. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist. Nach dem Hochladen zeigt eine Vorschau die erkannte Tabelle zum Prüfen. Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert; sie kann auch die Gehaltstabelle enthalten. Interne Reglemente, Einstellungsdateien und Lohntabellen gehören **nicht** in dieses Repository, denn es ist öffentlich. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert. Die `.gitignore` schliesst `*einstellungen*.json` vorsorglich aus.
+**Gehaltstabellen** werden unter Einstellungen → Gehaltstabellen als PDF-, Excel- oder CSV-Datei hochgeladen: eine Zeile pro Lohnklasse, in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … bei 100 %.
+- Überschriften werden übersprungen. Hat eine Klasse mehrere Zeilen (Jahreslohn, 13/12 Auszahlungen, pro Stunde, pro Lektion), zählt «Jahreslohn»; «pro Lektion» und «pro Stunde» werden zusätzlich gespeichert.
+- Tabellen mit Stufen als Zeilen werden gedreht, Monatslöhne auf Wunsch × 13 umgerechnet, «Stand: TT.MM.JJJJ» wird als «gültig ab» übernommen. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist.
+- **Mehrere Tabellen:** z. B. 2026 und 2027. Jede Vorlage nimmt automatisch die Tabelle, die an ihrem Stichtag gilt (jüngstes «gültig ab» bis zum Stichtag), oder eine fest gewählte. Eine neue Tabelle mit gleichem Datum ersetzt auf Wunsch die alte.
+- **Prüfung:** Nach dem Hochladen prüft die App, ob die Löhne pro Klasse mit jeder Stufe steigen, ob Klassen fehlen, ob alle Klassen gleich viele Stufen haben und ob höhere Klassen höher beginnen. Auffälligkeiten stehen bei der Tabelle.
+- **Korrigieren:** Alle Werte (Jahreslohn, pro Lektion, pro Stunde) lassen sich direkt in der Tabelle ändern; die Prüfung läuft sofort neu.
+
+Interne Reglemente, Einstellungsdateien und Lohntabellen gehören **nicht** in dieses Repository, denn es ist öffentlich. Sie liegen zentral auf dem Server (siehe oben) oder werden als Einstellungsdatei (JSON) intern weitergegeben. Die `.gitignore` schliesst `*einstellungen*.json` und `api/data/` aus.
 
 Beispiel mit den Standardregeln: 10 Jahre Berufserfahrung, davon 5 als Lehrperson, Vorlage «Lehrperson» → 5 × 100 % + 5 × 50 % = **7,5 Jahre**.
 

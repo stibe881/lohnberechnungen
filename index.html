@@ -91,14 +91,21 @@
     <dialog id="settingsDialog" class="dialog dialog-wide">
         <form method="dialog" class="dialog-inner" id="settingsForm">
             <h2>Einstellungen</h2>
+            <h3>Server und Zugang</h3>
+            <div class="grid-2">
+                <label class="field"><span>Zugangspasswort (für KI-Auswertung und zentrale Einstellungen)</span><input type="password" id="aiPassword" autocomplete="off"></label>
+                <label class="field" id="adminPasswordField"><span>Admin-Passwort (nur zum Speichern der zentralen Einstellungen)</span><input type="password" id="adminPassword" autocomplete="off"></label>
+            </div>
+            <label class="check"><input type="checkbox" id="sharedEnabled"> Vorlagen, Berufe und Gehaltstabellen zentral auf dem Server speichern (alle mit Zugangspasswort rechnen mit denselben Einstellungen)</label>
+            <p class="hint" id="sharedStatus"></p>
+
             <h3>KI-Auswertung mit Claude</h3>
             <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts)</label>
             <div class="mode-row">
                 <label class="check"><input type="radio" name="aiMode" value="server"> Über euren Server (API-Schlüssel zentral hinterlegt)</label>
                 <label class="check"><input type="radio" name="aiMode" value="key"> Eigener API-Schlüssel in diesem Browser</label>
             </div>
-            <div id="aiServerFields" class="grid-2">
-                <label class="field"><span>Zugangspasswort</span><input type="password" id="aiPassword" autocomplete="off"></label>
+            <div id="aiServerFields">
                 <p class="hint" id="serverStatus"></p>
             </div>
             <div id="aiKeyFields" class="grid-2">
@@ -116,15 +123,11 @@
             <div id="tplList" class="tpl-list"></div>
             <button class="btn btn-ghost" type="button" id="addTpl">+ Vorlage hinzufügen</button>
 
-            <h3>Gehaltstabelle</h3>
-            <div class="salary-row"><p class="hint" id="salaryStatus"></p>
-                <div class="row-gap">
-                    <label class="btn btn-ghost btn-sm">Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".pdf,.xlsx,.xls,.ods,.csv,.txt,application/pdf,text/csv" hidden></label>
-                    <button class="btn btn-ghost btn-sm" type="button" id="removeSalary">Entfernen</button>
-                </div>
-            </div>
-            <div id="salaryPreview"></div>
-            <p class="hint">PDF-, Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen, Tabellen mit Stufen als Zeilen werden erkannt. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
+            <h3>Gehaltstabellen</h3>
+            <p class="hint">PDF-, Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen, Zeilen «pro Lektion» und «pro Stunde» mitgelesen, Tabellen mit Stufen als Zeilen erkannt. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist.<br>
+                Mehrere Tabellen sind möglich (z. B. 2026 und 2027): Jede Vorlage nimmt automatisch die Tabelle, die an ihrem Stichtag gilt, oder eine fest gewählte. Werte lassen sich in der Tabelle direkt korrigieren.</p>
+            <div id="salaryList" class="tpl-list"></div>
+            <label class="btn btn-ghost">+ Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".pdf,.xlsx,.xls,.ods,.csv,.txt,application/pdf,text/csv" hidden></label>
 
             <h3>Berufe</h3>
             <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>

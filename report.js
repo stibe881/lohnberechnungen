@@ -42,6 +42,8 @@
                 <tr><th>Stelle / Vorlage</th><td>${esc(v.template.name)} (Zielberuf: ${esc(v.catName(v.template.target))})</td></tr>
                 <tr><th>Geburtsdatum</th><td>${v.birth ? fmtDate(v.birth) : 'nicht angegeben'}</td></tr>
                 <tr><th>Auswertung</th><td>${esc(v.sourceText)}</td></tr>
+                ${v.salaryTableText ? `<tr><th>Gehaltstabelle</th><td>${esc(v.salaryTableText)}</td></tr>` : ''}
+                <tr><th>Einstellungen</th><td>${esc(v.settingsText)}</td></tr>
             </table>
             <div class="r-stats">
                 <div><span>Berufserfahrung total</span><b>${fmt(r.totalYears)} J.</b></div>
@@ -57,7 +59,7 @@
                 <thead><tr><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th><th class="num">Pensum</th><th class="num">Dauer (J.)</th><th class="num">Anrechnung</th><th class="num">Angerechnet (J.)</th></tr></thead>
                 <tbody>${rows || '<tr><td colspan="8">Keine Einträge</td></tr>'}</tbody>
             </table>
-            ${hasOverride ? '<p class="r-note">* Faktor manuell angepasst.</p>' : ''}
+            ${hasOverride ? `<p class="r-note">* Anrechnung manuell angepasst (${v.overrides} Eintr${v.overrides > 1 ? 'äge' : 'ag'}), abweichend von den Regeln der Vorlage.</p>` : ''}
             ${v.hinweise ? `<p class="r-note"><b>Hinweis aus der KI-Auswertung:</b> ${esc(v.hinweise)}</p>` : ''}
             <div class="r-sign">
                 <div><span>Geprüft durch</span></div>

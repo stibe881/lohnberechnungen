@@ -305,3 +305,12 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
     .rules-grid .rg-name { grid-column: 1 / -1; margin-top: 6px; }
     .topbar-inner { align-items: flex-start; }
 }
+
+/* Gehaltstabellen */
+#salaryList { margin-bottom: 10px; }
+#salaryList .tpl-target .ok { color: var(--good); font-weight: 600; }
+#salaryList .notice ul { margin: 4px 0 0 18px; padding: 0; }
+.salary-row .field.inline { flex-direction: row; align-items: center; gap: 8px; }
+.salary-table th, .salary-table td { padding: 3px 4px; }
+.salary-table input.cell { width: 92px; text-align: right; font-variant-numeric: tabular-nums; padding: 4px 6px; font-size: .82rem; }
+.badge-manual { background: var(--accent-soft); color: var(--accent); }
