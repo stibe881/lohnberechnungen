@@ -23,7 +23,7 @@ Erfasse jede berufliche Tätigkeit und jede Ausbildung, die einen Zeitraum hat, 
 - Die erste Lehre bzw. das erste Studium (sowie Schulen wie Matura) erhalten "__ausbildung". Eine weitere, spätere Berufsausbildung nach abgeschlossener erster (z. B. Zweitlehre, Zweitstudium, HF/FH nach einer Lehre in anderem Beruf) erhält "__zweitausbildung".
 - Praktika ausserhalb einer Ausbildung erhalten "__praktikum" (Pensum angeben). Assistenz-Einsätze im pädagogischen, betreuerischen oder pflegerischen Bereich (z. B. Klassenassistenz, Pädagogische Assistenz) erhalten "__assistenz".
 - Familienarbeit (Betreuung der eigenen Kinder, Familienpause, Elternzeit) erhält category "__familie", Militär- und Zivildienst "__dienst". Nimm Familienarbeit auf, wenn sie ausdrücklich mit Zeitraum im Lebenslauf steht. Stehen nur Kinder mit Geburtsjahren im Lebenslauf, erfasse einen Eintrag «Familienzeit (Kinder 0–18 Jahre)» von der Geburt des ersten bis zum 18. Geburtstag des jüngsten Kindes (höchstens bis heute, ongoing wenn noch nicht erreicht) mit note «aus den Geburtsjahren der Kinder abgeleitet».
-- pensum: Beschäftigungsgrad in Prozent, falls angegeben (bei Spannen wie «60–80 %» den Mittelwert), sonst 100.
+- pensum: Beschäftigungsgrad in Prozent, falls angegeben (bei Spannen wie «60–80 %» den Mittelwert); steht kein Pensum im Lebenslauf, 0 eintragen (unbekannt) – nicht raten.
 - title: die Funktion (z. B. «Primarlehrerin 4. Klasse»), employer: Arbeitgeber bzw. Schule mit Ort, falls angegeben.
 - note: nur ausfüllen, wenn Beruf, Daten oder Pensum unsicher sind (ein kurzer Satz), sonst leerer String.
 - name: vollständiger Name der Person, falls ersichtlich, sonst leerer String.
@@ -125,7 +125,8 @@ function toEntry(e, categoryIds) {
         imprecise = imprecise || em === null;
     }
     const category = categoryIds.includes(e.category) ? e.category : '__sonstige';
-    const pensum = Number.isInteger(e.pensum) && e.pensum > 0 && e.pensum <= 100 ? e.pensum : 100;
+    const pensumKnown = Number.isInteger(e.pensum) && e.pensum > 0 && e.pensum <= 100;
+    const pensum = pensumKnown ? e.pensum : 100;
     return {
         id: 'e' + Math.random().toString(36).slice(2, 9),
         include: category !== '__ausbildung',   // Zweitausbildung zählt je nach Vorlage
@@ -136,10 +137,12 @@ function toEntry(e, categoryIds) {
         details: [e.employer, e.note].map(s => (s || '').trim()).filter(Boolean).join(' · '),
         category,
         pensum,
+        pensumUnknown: !pensumKnown, // kein Pensum im Lebenslauf: 100 % angenommen, bitte prüfen (bis 50 % zählt oft nur die Hälfte)
         factorOverride: null,
         raw: '',
         imprecise
     };
+
 }
 
 function friendlyError(err, viaServer) {

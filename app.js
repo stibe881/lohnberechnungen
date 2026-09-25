@@ -1190,7 +1190,14 @@
         }).join('');
     }
 
+    /** Hinweis, wenn bei angerechneten Stellen kein Pensum im Lebenslauf steht (100 % angenommen). */
+    function pensumNoticeHtml(c) {
+        const list = c.entries.filter(e => e.pensumUnknown && e.include && e.category !== '__ausbildung' && e.category !== '__familie');
+        if (!list.length) return '';
+        return `<div class="notice">${icon('alert')} <b>Pensum unbekannt bei ${list.length} Stelle${list.length > 1 ? 'n' : ''}:</b> ${list.slice(0, 4).map(e => `«${esc(e.title)}»`).join(', ')}${list.length > 4 ? ` und ${list.length - 4} weitere` : ''}. Der Lebenslauf nennt kein Pensum, gerechnet wird mit 100 %. Bis 50 % Pensum zählt nach den Regeln oft nur die Hälfte – bitte die Pensen in der Tabelle unten eintragen (z. B. aus dem Bewerbungsdossier oder Arbeitszeugnis).</div>`;
+    }
     /** Hinweis auf mögliche Doppelbewerbung. */
+
     function duplicateHtml(c) {
         const others = (P.findDuplicates(candidates).get(c.id) || []).map(id => candidates.find(x => x.id === id)).filter(Boolean);
         if (!others.length) return '';
@@ -1373,7 +1380,7 @@
                     ${e.ongoing ? '<div class="today">heute</div>' : `<input type="month" data-f="end" value="${esc(e.end)}" aria-label="Bis">`}
                     <label class="ongoing"><input type="checkbox" data-f="ongoing" ${e.ongoing ? 'checked' : ''}> bis heute</label>
                 </td>
-                <td class="c-small"><div class="suffix"><input type="number" min="0" max="100" data-f="pensum" value="${esc(e.pensum)}" aria-label="Pensum"><em>%</em></div></td>
+                <td class="c-small"><div class="suffix"><input type="number" min="0" max="100" data-f="pensum" value="${esc(e.pensum)}" aria-label="Pensum"><em>%</em></div>${e.pensumUnknown && e.include && e.category !== '__ausbildung' ? '<span class="badge" title="Im Lebenslauf steht kein Pensum – 100 % angenommen. Bis 50 % zählt meist nur die Hälfte, bitte prüfen.">Pensum?</span>' : ''}</td>
                 <td class="num">${pe.valid ? fmtYM(pe.months / 12) : '<span class="badge">Datum?</span>'}${e.imprecise ? '<span class="badge" title="Nur Jahreszahl angegeben – bitte Monate prüfen">ungenau</span>' : ''}</td>
                 <td class="c-small">
                     <div class="suffix"><input type="number" min="0" max="100" data-f="factorOverride" value="${auto ? '' : esc(e.factorOverride)}" placeholder="${pe.factor}" aria-label="Faktor"><em>%</em></div>
@@ -1409,6 +1416,7 @@
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
             ${heroHtml(c, r, t, pl0)}
             ${duplicateHtml(c)}
+            ${pensumNoticeHtml(c)}
             ${suggestionHtml(c)}
             ${correctionsHtml(c)}
             ${c.hinweise ? `<div class="notice"><b>Hinweis:</b> ${esc(c.hinweise)}</div>` : ''}
@@ -1599,6 +1607,7 @@
         else if (f === 'factorOverride') entry[f] = t.value === '' ? null : Math.max(0, Math.min(100, +t.value));
         else entry[f] = t.value;
         if (f === 'start' || f === 'end') entry.imprecise = false;
+        if (f === 'pensum') entry.pensumUnknown = false;
         if (f === 'ongoing' && !t.checked && !entry.end) {
             const now = new Date();
             entry.end = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
