@@ -58,6 +58,18 @@
 
     // --- Helpers ---
     const $ = s => document.querySelector(s);
+    // Icons (Linien-Icons als inline SVG, Farbe = Textfarbe)
+    const ICONS = {
+        sparkles: '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+        alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+        lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+        database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+        lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+        pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
+        x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        check: '<path d="M20 6 9 17l-5-5"/>'
+    };
+    const icon = (name, label) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${ICONS[name]}</svg>`;
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const fmt = y => (Math.round(y * 10) / 10).toLocaleString('de-CH', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     function fmtYM(y) {
@@ -138,7 +150,7 @@
         if (pl.ups) s += `, +${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} nach ${(t.classUpYears || []).slice(0, pl.ups).join(' und ')} Jahren`;
         if (pl.adjustment && pl.adjustment.delta) s += `, Korrektur: ${pl.adjustment.label}`;
         if (t.baseName) s = s.replace(`Grundklasse ${t.classMin}`, `Grundklasse ${t.classMin} (Grundfunktion «${t.baseName}» +${t.baseDelta}${t.classCap ? `, max. ${t.classCap}` : ''})`);
-        if (t.note) s += '. Hinweis: ' + t.note;
+        if (t.note) s += '. Hinweis: ' + t.note.replace(/[.\s]+$/, '');
         if (!pl.table) return s + ' (keine Gehaltstabelle hinterlegt)';
         s += `. Gehaltstabelle ${tableLabel(pl.table)}`;
         if (pl.future) s += ' – gilt am Stichtag noch nicht, keine gültige Tabelle vorhanden';
@@ -480,15 +492,15 @@
 
     function render() {
         if (defaultTemplateId !== AUTO && !settings.templates.some(t => t.id === defaultTemplateId)) defaultTemplateId = settings.templates[0]?.id || '';
-        $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>✨ Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>` + tplOptions(defaultTemplateId);
+        $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>` + tplOptions(defaultTemplateId);
         $('#privacy').innerHTML = aiActive()
-            ? `✨ KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
+            ? `${icon('sparkles')} KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
             : ai.enabled
-                ? '⚠️ KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
-                : storeActive() ? '🔒 Lebensläufe werden in diesem Browser ausgelesen und nicht an Claude gesendet.' : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
-        if (storeActive()) $('#privacy').innerHTML += `<br>💾 Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
-            + (store.error ? `<br><span class="warn">⚠️ ${esc(store.error)}</span>` : '');
-        else if (store.available) $('#privacy').innerHTML += `<br><span class="warn">⚠️ Personen werden nicht gespeichert und sind nach dem Neuladen weg: ${esc(storeReason())}</span>`;
+                ? icon('alert') + ' KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
+                : storeActive() ? icon('lock') + ' Lebensläufe werden in diesem Browser ausgelesen und nicht an Claude gesendet.' : icon('lock') + ' Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
+        if (storeActive()) $('#privacy').innerHTML += `<br>${icon('database')} Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
+            + (store.error ? `<br><span class="warn store-warn">${icon('alert')} ${esc(store.error)}</span>` : '');
+        else if (store.available) $('#privacy').innerHTML += `<br><span class="warn store-warn">${icon('alert')} Personen werden nicht gespeichert und sind nach dem Neuladen weg: ${esc(storeReason())}</span>`;
         renderOverview();
         renderDetail();
         scheduleSave();
@@ -570,7 +582,7 @@
         } catch (e) {
             if (!store.error) setStatus('Auswertung konnte nicht in der Datenbank gespeichert werden: ' + e.message, true);
             store.error = 'Speichern fehlgeschlagen: ' + e.message;
-            $('#privacy').innerHTML = $('#privacy').innerHTML.replace(/<br><span class="warn">⚠️.*$/, '') + `<br><span class="warn">⚠️ ${esc(store.error)}</span>`;
+            $('#privacy').innerHTML = $('#privacy').innerHTML.replace(/<br><span class="warn store-warn">.*$/, '') + `<br><span class="warn store-warn">${icon('alert')} ${esc(store.error)}</span>`;
         } finally {
             saving = false;
         }
@@ -586,14 +598,14 @@
             }
             const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
-                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ' <span class="mini-ai" title="ausgewertet mit Claude">✨</span>' : ''}${(n => n ? ` <span class="badge badge-manual" title="${n} Anrechnung${n > 1 ? 'en' : ''} manuell angepasst">✎ ${n} manuell</span>` : '')(overrideCount(c))}</td>
+                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ` <span class="mini-ai" title="ausgewertet mit Claude">${icon('sparkles', 'ausgewertet mit Claude')}</span>` : ''}${(n => n ? ` <span class="badge badge-manual" title="${n} Anrechnung${n > 1 ? 'en' : ''} manuell angepasst">${icon('pencil')} ${n} manuell</span>` : '')(overrideCount(c))}</td>
                 <td>${esc(tplOf(c).name)}${c.autoTemplate && c.suggestion && c.suggestion.id === c.templateId ? ' <span class="mini-ai" title="aus dem Lebenslauf vorgeschlagen">vorgeschlagen</span>' : ''}</td>
                 <td class="num">${fmt(r.totalYears)}</td>
                 <td class="num">${fmt(r.targetYears)}</td>
                 <td class="num">${fmt(r.otherYears)}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong></td>
                 <td class="num">${(pl => pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : `<button type="button" class="link-btn" data-edittpl="${esc(tplOf(c).id)}" title="Die Vorlage hat keine Lohnklassen">Lohnklassen fehlen</button>`)(placementFor(c, r))}</td>
-                <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Entfernen" aria-label="Entfernen">✕</button></td>
+                <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Entfernen" aria-label="Entfernen">${icon('x')}</button></td>
             </tr>`;
         }).join('');
     }
@@ -605,7 +617,7 @@
         const name = id => (settings.templates.find(t => t.id === id) || { name: '–' }).name;
         const btn = id => `<button type="button" class="link-btn" data-usetpl="${esc(id)}">${esc(name(id))}</button>`;
         const active = sg.id === c.templateId;
-        return `<p class="suggestion">${active ? '✨ Vorgeschlagene Funktion' : '💡 Laut Lebenslauf passt eher'}: <b>${active ? esc(name(sg.id)) : btn(sg.id)}</b>`
+        return `<p class="suggestion">${active ? icon('sparkles') + ' Vorgeschlagene Funktion' : icon('lightbulb') + ' Laut Lebenslauf passt eher'}: <b>${active ? esc(name(sg.id)) : btn(sg.id)}</b>`
             + (sg.reason ? ` – ${esc(sg.reason)}` : '') + (sg.source === 'ki' ? ' (Claude)' : ' (Stichwörter)')
             + (sg.alternatives && sg.alternatives.length ? `<br>Weitere mögliche: ${sg.alternatives.filter(id => id !== c.templateId).map(btn).join(', ')}` : '')
             + '</p>';
@@ -644,7 +656,7 @@
                     ${auto ? `<div class="factor-auto" title="${esc(P.describeRule(t.rules[pe.ruleKey]))}">${esc((P.RULE_KEYS.find(k => k.id === pe.ruleKey) || {}).name || 'automatisch')}</div>` : '<div class="factor-auto">manuell</div>'}
                 </td>
                 <td class="num"><strong>${fmt(pe.credited / 12)}</strong></td>
-                <td><button class="btn-icon" type="button" data-del="${e.id}" title="Zeile löschen" aria-label="Zeile löschen">✕</button></td>
+                <td><button class="btn-icon" type="button" data-del="${e.id}" title="Zeile löschen" aria-label="Zeile löschen">${icon('x')}</button></td>
             </tr>`;
         }).join('');
 
@@ -662,7 +674,7 @@
                     <label class="field"><span>Korrektur Lohnklasse</span><select data-cf="adjustmentId"><option value="">keine</option>${(settings.classAdjustments || []).map(a => `<option value="${esc(a.id)}"${a.id === c.adjustmentId ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}
                 </div>
             </div>
-            <p class="source">${c.source === 'ki' ? '<span class="pill pill-ai">✨ ausgewertet mit Claude</span>' : '<span class="pill">ausgewertet mit Regeln</span>'}
+            <p class="source">${c.source === 'ki' ? `<span class="pill pill-ai">${icon('sparkles')} ausgewertet mit Claude</span>` : '<span class="pill">ausgewertet mit Regeln</span>'}
                 ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
             ${suggestionHtml(c)}
@@ -680,7 +692,7 @@
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
             ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
                 <thead><tr>
-                    <th title="Anrechnen">✓</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
+                    <th title="Anrechnen">${icon('check', 'Anrechnen')}</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
                     <th>Pensum</th><th class="num">Dauer</th><th title="Anrechnung pro Monat nach den Regeln der Vorlage; überschreibbar">Anrechnung</th><th class="num">Angerechnet</th><th></th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
@@ -912,12 +924,12 @@
         $('#storeStatus').innerHTML = !store.available ? '<span class="warn">Keine Datenbank-Anbindung gefunden (braucht PHP-Hosting und api/candidates.php). Personen sind nach dem Neuladen weg.</span>'
             : !store.enabled ? `<span class="warn">${esc(store.problem || 'Datenbank ist nicht eingerichtet.')}</span>`
             : draftAi.storeCandidates === false ? 'Personen werden nicht gespeichert und sind nach dem Neuladen weg.'
-            : `<span class="ok">✓ Datenbank verbunden</span>${store.keepDays ? ` – Personen ohne Änderung werden nach ${store.keepDays} Tagen gelöscht` : ''}. PDF-Dateien werden nicht gespeichert, nur der erkannte Text und die Auswertung.`
+            : `<span class="ok">${icon('check')} Datenbank verbunden</span>${store.keepDays ? ` – Personen ohne Änderung werden nach ${store.keepDays} Tagen gelöscht` : ''}. PDF-Dateien werden nicht gespeichert, nur der erkannte Text und die Auswertung.`
               + (store.error ? `<br><span class="warn">${esc(store.error)}</span>` : '');
         $('#aiTextOnly').checked = draftAi.textOnly;
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
         $('#serverStatus').innerHTML = server.configured
-            ? '<span class="ok">✓ Server ist eingerichtet' + (server.passwordRequired ? ', Zugangspasswort erforderlich' : '') + '</span>'
+            ? '<span class="ok">' + icon('check') + ' Server ist eingerichtet' + (server.passwordRequired ? ', Zugangspasswort erforderlich' : '') + '</span>'
                 + (server.passwordRequired ? '' : '<br><span class="warn">Achtung: kein Zugangspasswort gesetzt – bitte in config.php «password» eintragen.</span>')
                 + (server.keyFormatOk ? '' : '<br><span class="warn">Der Schlüssel beginnt nicht mit «sk-ant-» – bitte prüfen.</span>')
             : server.available
@@ -944,8 +956,8 @@
         if (draftAi.shared === false) return 'Einstellungen werden nur in diesem Browser gespeichert.';
         const when = shared.updatedAt ? ' vom ' + new Date(shared.updatedAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' }) : '';
         let html = shared.exists
-            ? `<span class="ok">✓ Zentrale Einstellungen: Version ${shared.version}${esc(when)}</span>`
-            : '<span class="ok">✓ Server bereit</span> – noch keine zentralen Einstellungen gespeichert. Beim nächsten «Speichern» werden die Einstellungen dieses Browsers für alle übernommen.';
+            ? `<span class="ok">${icon('check')} Zentrale Einstellungen: Version ${shared.version}${esc(when)}</span>`
+            : '<span class="ok">' + icon('check') + ' Server bereit</span> – noch keine zentralen Einstellungen gespeichert. Beim nächsten «Speichern» werden die Einstellungen dieses Browsers für alle übernommen.';
         if (shared.error) html += `<br><span class="warn">${esc(shared.error)}</span>`;
         if (shared.adminRequired) html += '<br>Zum Speichern braucht es das Admin-Passwort.';
         return html;
@@ -974,7 +986,7 @@
         const open = new Set([...document.querySelectorAll('#tplList details[open]')].map(d => d.dataset.tpl));
         if (openId) open.add(openId);
         $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${open.has(t.id) ? 'open' : ''}>
-            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${(e => e.fixedAnnual ? ` · fixer Lohn ${chf(+e.fixedAnnual)}` : e.classMin ? ` · Lohnklasse ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}${e.baseName ? ' (Grundfunktion +' + e.baseDelta + ')' : ''}` : '')(P.effectiveTemplate(t, draft.templates))}${t.keywords && t.keywords.length ? ' · ✨' : ''}</span></summary>
+            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${(e => e.fixedAnnual ? ` · fixer Lohn ${chf(+e.fixedAnnual)}` : e.classMin ? ` · Lohnklasse ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}${e.baseName ? ' (Grundfunktion +' + e.baseDelta + ')' : ''}` : '')(P.effectiveTemplate(t, draft.templates))}${t.keywords && t.keywords.length ? ' · ' + icon('sparkles', 'mit Stichwörtern für den Vorschlag') : ''}</span></summary>
             <div class="tpl-body">
                 <div class="grid-2">
                     <label class="field"><span>Name der Vorlage (z. B. «Primarlehrperson»)</span><input type="text" data-t="name" value="${esc(t.name)}"></label>
@@ -1033,7 +1045,7 @@
         $('#catList').innerHTML = draft.categories.map(cat => `<div class="cat-item" data-cat="${esc(cat.id)}">
             <label class="field"><span>Bezeichnung</span><input type="text" data-k="name" value="${esc(cat.name)}" required></label>
             <label class="field"><span>Stichwörter (durch Komma getrennt)</span><textarea rows="2" data-k="keywords">${esc(cat.keywords.join(', '))}</textarea></label>
-            <button class="btn-icon" type="button" data-delcat="${esc(cat.id)}" title="Beruf löschen" aria-label="Beruf löschen">✕</button>
+            <button class="btn-icon" type="button" data-delcat="${esc(cat.id)}" title="Beruf löschen" aria-label="Beruf löschen">${icon('x')}</button>
         </div>`).join('');
     }
 
@@ -1046,7 +1058,7 @@
         const extra = SALARY_KINDS.slice(1).filter(k => Object.keys(st[k.id] || {}).length).map(k => k.name);
         const n = P.checkSalaryTable(st).length;
         return `${st.validFrom ? 'gültig ab ' + esc(fmtDay(st.validFrom)) : 'ohne Gültigkeitsdatum'} · LK ${cls[0]}–${cls[cls.length - 1]} · ${stages} Stufen${extra.length ? ' · ' + extra.join(', ') : ''}`
-            + (n ? ` <span class="badge">⚠ ${n} Hinweis${n > 1 ? 'e' : ''}</span>` : ' <span class="ok">✓ geprüft</span>');
+            + (n ? ` <span class="badge">${icon('alert')} ${n} Hinweis${n > 1 ? 'e' : ''}</span>` : ` <span class="ok">${icon('check')} geprüft</span>`);
     }
     function salaryWarnings(st) {
         const w = P.checkSalaryTable(st);

@@ -319,3 +319,12 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 .suggestion { font-size: .85rem; background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; }
 .suggestion .link-btn { font-weight: 600; }
 .privacy .warn { color: var(--warn); font-weight: 600; }
+
+/* Icons (inline SVG) */
+.icon { width: 1.1em; height: 1.1em; vertical-align: -0.18em; flex-shrink: 0; }
+.btn .icon { margin-right: 4px; }
+.btn-icon .icon { width: 16px; height: 16px; vertical-align: middle; margin: 0; }
+.dz-icon { line-height: 1; }
+.dz-icon .icon { width: 40px; height: 40px; color: var(--accent); }
+.badge .icon, .pill .icon { width: 1em; height: 1em; }
+.mini-ai .icon { color: var(--accent); }

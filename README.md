@@ -16,7 +16,7 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Vorlagen (Stellen):** Pro Stelle eigene Anrechnungsregeln, z. B. nach Lohnreglement (siehe «Berechnung»).
 - **Zeitstrahl** pro Person: Stellen nach Faktor eingefärbt, Lücken ab 3 Monaten schraffiert, Mindestalter als Linie.
 - **Bericht (PDF)** pro Person oder für alle: Regeln, Rechenweg, Zeitstrahl, Stellenliste und Unterschriftenfeld «Geprüft durch». Hält fest, womit gerechnet wurde: verwendete Gehaltstabelle mit Gültigkeit, Version der zentralen Einstellungen und Zeitpunkt der Berechnung. Öffnet den Druckdialog, dort «Als PDF speichern» wählen.
-- **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «✎ manuell» markiert, im Bericht vermerkt und im CSV gezählt.
+- **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «manuell» (Stift-Symbol) markiert, im Bericht vermerkt und im CSV gezählt.
 - **Zentrale Einstellungen:** Vorlagen, Berufe und Gehaltstabellen liegen auf dem Server, alle Nutzenden rechnen mit demselben Stand (siehe «Server einrichten»).
 - **Auswertungen speichern:** Mit Datenbank (MySQL/MariaDB) bleiben ausgewertete Personen nach dem Neuladen erhalten (siehe «Datenbank»).
 - **Funktion automatisch vorschlagen:** Aus Ausbildung und Tätigkeiten im Lebenslauf schlägt die App die passende Vorlage (Funktion des Einreihungsplans) vor – mit Claude oder über Stichwörter pro Vorlage – samt Begründung und Alternativen.
@@ -51,7 +51,7 @@ Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei fals
 Mit `api/candidates.php` werden die ausgewerteten Personen in einer MySQL-/MariaDB-Datenbank gespeichert. In `config.php` den Block `db` mit Server, Datenbankname, Benutzer und Passwort ausfüllen (siehe `config.sample.php`); die Tabelle `lr_candidates` wird beim ersten Aufruf automatisch angelegt.
 
 - Gespeichert werden Name, Geburtsdatum, erkannter Text, Stellen, gewählte Vorlage und Anpassungen – **keine PDF-Dateien**. «Neu auswerten» arbeitet nach dem Neuladen mit dem gespeicherten Text.
-- Änderungen werden automatisch gespeichert. Alle mit Zugangspasswort sehen dieselben Personen; «✕» in der Übersicht löscht eine Person endgültig.
+- Änderungen werden automatisch gespeichert. Alle mit Zugangspasswort sehen dieselben Personen; das Kreuz-Symbol in der Übersicht löscht eine Person endgültig.
 - Personen, die `keep_days` Tage (Standard 180) nicht geändert wurden, werden automatisch gelöscht. Die Frist an die internen Vorgaben zur Aufbewahrung von Bewerbungsunterlagen anpassen.
 - Zugangsdaten der Datenbank gehören nur in `config.php` auf dem Server, nie ins Repository.
 
