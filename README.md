@@ -44,7 +44,7 @@ Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei fals
 
 ## Berechnung
 
-Die Regeln stehen in **Vorlagen** (Einstellungen → Vorlagen), eine pro Stelle. Für jede Tätigkeitsart legt die Vorlage eine Anrechnung fest:
+Die Regeln stehen in **Vorlagen** (Einstellungen → Vorlagen), eine pro Stelle. In der Auswertung öffnet «Gewichtungen anpassen» direkt die verwendete Vorlage. Für jede Tätigkeitsart legt die Vorlage eine Anrechnung fest:
 
 | Tätigkeitsart | Standard |
 | --- | --- |

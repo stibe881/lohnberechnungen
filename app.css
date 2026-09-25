@@ -202,6 +202,7 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 .head-fields .field { min-width: 170px; }
 .sub-h { margin: 22px 0 8px; }
 .formula .rules { margin-top: 6px; font-size: .78rem; }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .mini-ai { font-size: .8rem; }
 .loading-cell { color: var(--muted); font-size: .85rem; }
 .spinner { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }

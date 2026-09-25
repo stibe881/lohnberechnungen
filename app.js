@@ -460,7 +460,7 @@
                 <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
             ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div></div>` : '')(placementFor(c, r))}
-            <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))}</div></div>
+            <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
             ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
                 <thead><tr>
@@ -591,6 +591,8 @@
             render();
             return;
         }
+        const edit = e.target.closest('[data-edittpl]');
+        if (edit) { openSettings(edit.dataset.edittpl); return; }
         const act = e.target.closest('[data-action]');
         if (!act) return;
         if (act.dataset.action === 'add') {
@@ -792,14 +794,17 @@
         });
     }
 
-    $('#openSettings').addEventListener('click', async () => {
+    /** Öffnet die Einstellungen; mit tplId wird diese Vorlage aufgeklappt und angezeigt. */
+    async function openSettings(tplId) {
         draft = clone(settings);
         draftAi = clone(ai);
         renderAiForm();
-        renderSettingsForm();
+        renderSettingsForm(tplId);
         $('#settingsDialog').showModal();
+        if (tplId) document.querySelector(`#tplList [data-tpl="${CSS.escape(tplId)}"] .rules-grid`)?.scrollIntoView({ block: 'center' });
         if (window.CVAi) { server = await CVAi.checkServer(SERVER_URL); renderAiForm(); }
-    });
+    }
+    $('#openSettings').addEventListener('click', () => openSettings());
     $('#settingsDialog').addEventListener('change', e => {
         if (e.target.name === 'aiMode' || e.target.id === 'aiEnabled') { readAiForm(); renderAiForm(); }
         if (e.target.dataset.rf === 'mode') {
