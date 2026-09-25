@@ -14,7 +14,7 @@
     const CANDIDATES_URL = new URL('api/candidates.php', location.href).href;
     const SHARED_KEY = 'cvrechner.shared.v1'; // Version der zuletzt geladenen/gespeicherten zentralen Einstellungen
     const CONCURRENCY = 3; // so viele Lebensläufe wertet Claude gleichzeitig aus
-    const OVERVIEW_MAX = 5; // so viele Personen zeigt die Übersicht auf der Startseite
+    const OVERVIEW_MAX = 2; // so viele Personen zeigt die Übersicht auf der Startseite
 
     if (window.pdfjsLib) {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
