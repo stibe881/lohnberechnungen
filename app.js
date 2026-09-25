@@ -604,7 +604,8 @@
             if (errors.length) errors.forEach(e => toast(e, 'warn', { ms: 9000 }));
             toast(batch.length === 1 ? `${batch[0].name} ausgewertet.` : `${batch.length} Lebensläufe ausgewertet.`, 'ok');
             // Zeugnisse aus dem gleichen Stapel: bei genau einem Lebenslauf direkt zuordnen
-            if (refDocs.length && batch.length === 1) await applyDocs(batch[0], refDocs, useAi);
+            if (refDocs.length && batch.length === 1) { toast(`Als Zeugnis/Beleg erkannt: ${refDocs.map(d => `«${d.name}»`).join(', ')}.`, 'info'); await applyDocs(batch[0], refDocs, useAi); }
+            else if (!refDocs.length && batch.length > 1 && sources.length > 1) toast(`${batch.length} Dateien als Lebenslauf eingestuft. Zeugnisse werden am Titel («Arbeitszeugnis», «Arbeitsbestätigung» …) oder an typischen Sätzen erkannt – sonst bei der Person «Zeugnisse hinzufügen» nutzen.`, 'info', { ms: 9000 });
             else if (refDocs.length) toast(`${refDocs.length} Zeugnis${refDocs.length > 1 ? 'se' : ''} erkannt, aber ${batch.length} Lebensläufe – bitte bei der jeweiligen Person «Zeugnisse hinzufügen».`, 'warn', { ms: 9000 });
             $('#status').textContent = '';
             render();
@@ -1256,10 +1257,16 @@
     }
     /** Sieht der Text nach einem Zeugnis, einer Bestätigung, einem Vertrag oder Diplom aus – und nicht nach einem Lebenslauf? */
     function looksLikeReference(text) {
-        const head = String(text || '').slice(0, 1500).toLowerCase();
-        const all = String(text || '').toLowerCase();
-        const isRef = /arbeitszeugnis|zwischenzeugnis|arbeitsbest[äa]tigung|arbeitsvertrag|anstellungsvertrag|f[äa]higkeitszeugnis|\bdiplom\b|lehrabschluss|zertifikat|certificate of employment|reference letter/.test(head);
-        const isCv = /lebenslauf|curriculum vitae|\bcv\b|berufserfahrung|beruflicher werdegang|werdegang|berufliche t[äa]tigkeiten|ausbildung\s*\n|schulbildung|sprachen|hobbys|referenzen/.test(all) && /\d{4}\s*[–-]\s*(\d{4}|heute)/.test(all);
+        const all = String(text || '').replace(/\s+/g, ' ').toLowerCase();
+        const head = all.slice(0, 2500);
+        // Zeugnis-Merkmale: Titel oder typische Formulierungen («war bei uns tätig», «verlässt uns», «Beschäftigungsgrad»)
+        const titleHit = /arbeits\s*zeugnis|zwischen\s*zeugnis|arbeitsbest[äa]tigung|arbeitsvertrag|anstellungsvertrag|f[äa]higkeitszeugnis|\bdiplom\b|lehrabschluss|zertifikat|certificate of employment|reference letter|lettre de travail|certificat de travail/.test(head);
+        const phraseHits = (all.match(/bei uns t[äa]tig|in unserem (?:betrieb|unternehmen|team|haus)|verl[äa]sst uns|verliess uns|auf eigenen wunsch|wir w[üu]nschen (?:ihr|ihm)|wir bedauern|besch[äa]ftigungsgrad|anstellungsgrad|wir best[äa]tigen|es wird best[äa]tigt|zu unserer vollen zufriedenheit|zu unserer vollsten zufriedenheit|arbeitsverh[äa]ltnis|dienstverh[äa]ltnis/g) || []).length;
+        const isRef = titleHit || phraseHits >= 2;
+        // Lebenslauf-Merkmale: Überschriften und mehrere Zeiträume
+        const cvHeads = (all.match(/lebenslauf|curriculum vitae|berufserfahrung|beruflicher werdegang|berufliche t[äa]tigkeiten|aus- und weiterbildung|schulbildung|sprachkenntnisse|hobbys|hobbies|referenzen|persönliche angaben|personalien/g) || []).length;
+        const ranges = (all.match(/(?:\d{2}\.)?\d{4}\s*(?:–|-|bis)\s*(?:(?:\d{2}\.)?\d{4}|heute)/g) || []).length;
+        const isCv = cvHeads >= 2 && ranges >= 3;
         return isRef && !isCv;
     }
     /** Gelesene Dokumente auf eine Person anwenden (Zuordnung mit Claude oder Regeln), rückgängig. */
