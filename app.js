@@ -345,7 +345,9 @@
                     ? 'kein Text gefunden (eingescannt?) – in den Einstellungen «Nur Text an Claude senden» ausschalten, damit Claude das PDF selbst liest'
                     : 'kein Text gefunden (eingescanntes Dokument? Mit der KI-Auswertung lesbar)');
             }
-            return { text, pdfBase64 };
+            // Gescannte Seiten (nur Bilder) zählen: typisch für Zeugnisse in einem Bewerbungsdossier
+            const scannedPages = window.pdfjsLib ? await countScannedPages(buf.slice(0)).catch(() => []) : [];
+            return { text, pdfBase64, scannedPages, pages: scannedPages.total };
         }
         if (name.endsWith('.docx')) {
             if (!window.mammoth) throw new Error('Word-Bibliothek konnte nicht geladen werden (Internetverbindung?).');
@@ -408,7 +410,20 @@
         return rows;
     }
 
+    /** Seitennummern ohne Text (Scans) und die Seitenzahl. */
+    async function countScannedPages(buf) {
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const out = [];
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const content = await (await pdf.getPage(p)).getTextContent();
+            if (!content.items.some(it => typeof it.str === 'string' && it.str.trim().length > 3)) out.push(p);
+        }
+        out.total = pdf.numPages;
+        return out;
+    }
+
     async function pdfToText(buf) {
+
         const out = [];
         for (const lines of await pdfLines(buf)) {
             let prevY = null, prevH = 0;
@@ -453,6 +468,11 @@
                 c.entries = res.entries;
                 c.hinweise = res.hinweise;
                 c.aiFlags = res.flags || null;
+                // Zeugnisse und Belege aus dem Dossier: Stellen belegen (genaue Daten, Pensum) und vermerken
+                if (Array.isArray(res.documents) && res.documents.length) {
+                    const { changed } = P.applyReferences(c.entries, res.documents);
+                    c.docs = res.documents.map(r => ({ file: r.file, kind: r.kind, employer: r.employer, title: r.title, start: r.start, end: r.end, ongoing: r.ongoing, pensum: r.pensum, note: r.note, matched: !!changed.find(x => x.ref === r), at: new Date().toISOString() }));
+                } else c.docs = [];
                 applySuggestion(c, res);
                 if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
                 if (res.birth && !c.birthEdited) c.birth = res.birth;
@@ -559,12 +579,13 @@
             let read = 0;
             for (const src of sources) {
                 try {
-                    const { text, pdfBase64 } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
+                    const { text, pdfBase64, scannedPages } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
                     setProgress(++read, sources.length, `Dateien werden gelesen (${read} von ${sources.length}) …`);
                     // Zeugnisse und Belege im gleichen Stapel: nicht als Person anlegen, sondern der Person zuordnen
                     if (src.file && looksLikeReference(text)) { refDocs.push({ name: src.file.name, text, pdfBase64 }); continue; }
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
+                    c.scannedPages = scannedPages && scannedPages.length ? { pages: [...scannedPages], total: scannedPages.total, sentToAi: !!pdfBase64 } : null;
                     if (src.file) { c.file = src.file; c.fileName = src.file.name; }
                     if (isPosChoice(defaultTemplateId)) { const pos = positionOf(defaultTemplateId.slice(4)); if (pos) applyPosition(c, pos); }
                     batch.push(c);
@@ -1109,7 +1130,8 @@
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
         'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName',
-        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited', 'children', 'childrenEdited', 'docs'];
+        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited', 'children', 'childrenEdited', 'docs', 'scannedPages'];
+
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -1308,6 +1330,13 @@
         inp.value = '';
         if (c && !c.loading) addDocuments(c, files).catch(err => toast('Zeugnisse konnten nicht gelesen werden: ' + err.message, 'error'));
     });
+    /** Hinweis auf gescannte Seiten im Dossier (Zeugnisse), die ohne Claude bzw. mit «Nur Text» nicht gelesen wurden. */
+    function scannedHtml(c) {
+        const sp = c.scannedPages;
+        if (!sp || !sp.pages.length || (sp.sentToAi && c.source === 'ki')) return '';
+        const pages = sp.pages.length > 6 ? `${sp.pages[0]}–${sp.pages[sp.pages.length - 1]}` : sp.pages.join(', ');
+        return `<div class="notice">${icon('alert')} <b>${sp.pages.length} von ${sp.total} Seiten sind gescannt</b> (Seite ${esc(pages)}) – vermutlich Zeugnisse und Diplome im Dossier. Sie wurden nicht gelesen, Pensen und genaue Daten daraus fehlen. ${aiActive() ? (ai.textOnly ? 'Unter Einstellungen → KI-Auswertung «Nur Text an Claude senden» ausschalten und «Neu auswerten» wählen, dann liest Claude die Zeugnisse mit.' : 'Mit «Neu auswerten» liest Claude das ganze Dossier inklusive Zeugnisse.') : 'Gescannte Seiten kann nur die KI-Auswertung mit Claude lesen (Einstellungen → KI-Auswertung, ohne «Nur Text»).'}</div>`;
+    }
     /** Liste der gelesenen Belege einer Person. */
     function docsHtml(c) {
         const docs = c.docs || [];
@@ -1605,6 +1634,7 @@
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
             ${heroHtml(c, r, t, pl0)}
             ${duplicateHtml(c)}
+            ${scannedHtml(c)}
             ${docsHtml(c)}
             ${pensumNoticeHtml(c)}
             ${suggestionHtml(c)}
@@ -1877,6 +1907,7 @@
                     } catch (e) { /* dann mit dem erkannten Text */ }
                 }
                 if (useAi && !c.pdfBase64 && !c.text.trim()) useAi = false; // nichts zum Senden vorhanden
+                if (c.scannedPages) c.scannedPages.sentToAi = !!(useAi && c.pdfBase64);
                 setStatus(useAi ? 'Claude wertet ' + c.name + ' neu aus …' : '');
                 c.loading = true;
                 render();
