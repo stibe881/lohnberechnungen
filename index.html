@@ -119,11 +119,12 @@
             <h3>Gehaltstabelle</h3>
             <div class="salary-row"><p class="hint" id="salaryStatus"></p>
                 <div class="row-gap">
-                    <label class="btn btn-ghost btn-sm">Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".xlsx,.xls,.ods,.csv,.txt,text/csv" hidden></label>
+                    <label class="btn btn-ghost btn-sm">Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".pdf,.xlsx,.xls,.ods,.csv,.txt,application/pdf,text/csv" hidden></label>
                     <button class="btn btn-ghost btn-sm" type="button" id="removeSalary">Entfernen</button>
                 </div>
             </div>
-            <p class="hint">Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
+            <div id="salaryPreview"></div>
+            <p class="hint">PDF-, Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen, Tabellen mit Stufen als Zeilen werden erkannt. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
 
             <h3>Berufe</h3>
             <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>

@@ -130,9 +130,10 @@
         return btoa(bin);
     }
 
-    async function pdfToText(buf) {
+    /** Liest die Textstücke eines PDFs und fasst sie pro Seite zu Zeilen zusammen (Stücke nach X sortiert). */
+    async function pdfLines(buf) {
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        const out = [];
+        const pages = [];
         for (let p = 1; p <= pdf.numPages; p++) {
             const page = await pdf.getPage(p);
             const content = await page.getTextContent();
@@ -148,9 +149,35 @@
                 if (line && Math.abs(line.y - it.y) <= Math.max(2, it.h * 0.45)) line.items.push(it);
                 else lines.push({ y: it.y, h: it.h, items: [it] });
             }
+            lines.forEach(line => line.items.sort((a, b) => a.x - b.x));
+            pages.push(lines);
+        }
+        return pages;
+    }
+
+    /** PDF-Tabelle als Zeilen und Zellen: Ein grösserer Abstand zwischen Textstücken beginnt eine neue Zelle. */
+    async function pdfToRows(buf) {
+        const rows = [];
+        for (const lines of await pdfLines(buf)) {
+            for (const line of lines) {
+                const cells = [];
+                let end = null;
+                for (const it of line.items) {
+                    if (end === null || it.x - end > it.h * 0.8) cells.push(it.s.trim());
+                    else cells[cells.length - 1] += (it.x - end > 1 ? ' ' : '') + it.s.trim();
+                    end = it.x + it.w;
+                }
+                rows.push(cells);
+            }
+        }
+        return rows;
+    }
+
+    async function pdfToText(buf) {
+        const out = [];
+        for (const lines of await pdfLines(buf)) {
             let prevY = null, prevH = 0;
             for (const line of lines) {
-                line.items.sort((a, b) => a.x - b.x);
                 let s = '', end = null;
                 for (const it of line.items) {
                     if (end !== null) {
@@ -748,12 +775,18 @@
         </div>`).join('');
     }
 
-    function renderSalaryStatus() {
+    function renderSalaryStatus(openPreview) {
         const st = draft.salaryTable;
         const cls = st ? Object.keys(st.classes).map(Number).sort((a, b) => a - b) : [];
+        const stages = st ? Math.max(...cls.map(k => st.classes[k].length)) : 0;
+        const n = v => v == null ? '' : Math.round(v).toLocaleString('de-CH');
         $('#salaryStatus').innerHTML = st
-            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]} · ${Math.max(...cls.map(k => st.classes[k].length))} Stufen`
+            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom.split('-').reverse().join('.')) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]} · ${stages} Stufen${st.note ? ` <br><span class="warn">${esc(st.note)}</span>` : ''}`
             : 'Keine Gehaltstabelle hinterlegt.';
+        $('#salaryPreview').innerHTML = st ? `<details${openPreview ? ' open' : ''}><summary>Tabelle anzeigen (bitte prüfen)</summary><div class="table-scroll"><table class="table salary-table">
+            <thead><tr><th>LK</th>${Array.from({ length: stages }, (_, i) => `<th class="num">Stufe ${i + 1}</th>`).join('')}</tr></thead>
+            <tbody>${cls.map(k => `<tr><th>${k}</th>${Array.from({ length: stages }, (_, i) => `<td class="num">${n(st.classes[k][i])}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div></details>` : '';
         $('#removeSalary').hidden = !st;
     }
 
@@ -859,24 +892,59 @@
         });
         return xlsxLoading;
     }
-    /** Liest Excel (erstes Blatt) oder CSV in Zeilen und Zellen. */
-    async function readTableFile(f) {
+    /** Liest Excel (erstes Blatt), CSV oder PDF in Zeilen und Zellen. */
+    async function readTableFile(f, buf) {
         if (/\.(csv|txt)$/i.test(f.name)) return P.parseCsv(await f.text());
+        if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
+            if (!window.pdfjsLib) throw new Error('PDF-Bibliothek konnte nicht geladen werden (Internetverbindung?)');
+            return pdfToRows(buf.slice(0));
+        }
         const X = await loadXlsx();
-        const wb = X.read(await f.arrayBuffer(), { type: 'array' });
+        const wb = X.read(buf, { type: 'array' });
         return X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
     }
+    /** Mit den KI-Einstellungen aus dem offenen Dialog (auch wenn noch nicht gespeichert). */
+    const draftAiReady = () => draftAi.mode === 'server' ? server.configured : !!draftAi.apiKey;
+
     $('#uploadSalary').addEventListener('change', async e => {
         const f = e.target.files[0];
         e.target.value = '';
         if (!f) return;
+        const isPdf = /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+        const name = f.name.replace(/\.[^.]+$/, '');
+        const status = $('#salaryStatus');
+        const before = status.innerHTML;
+        status.textContent = 'Gehaltstabelle wird gelesen …';
+        readAiForm();
         try {
-            const st = P.parseSalaryTable(await readTableFile(f), f.name.replace(/\.[^.]+$/, ''));
-            if (!st) { alert('In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.'); return; }
+            const buf = await f.arrayBuffer();
+            let st = null, readErr = null;
+            try { st = P.parseSalaryTable(await readTableFile(f, buf), name); } catch (err) { readErr = err; }
+            if (!st && isPdf && window.CVAi && draftAiReady()) {
+                status.textContent = 'Tabelle nicht direkt lesbar – Claude liest die Gehaltstabelle …';
+                const res = await window.CVAi.readSalaryTable(Object.assign(
+                    { model: draftAi.model, pdfBase64: toBase64(buf) },
+                    draftAi.mode === 'server' ? { serverUrl: SERVER_URL, password: draftAi.password } : { apiKey: draftAi.apiKey }
+                ));
+                if (Object.keys(res.classes).length) st = { name: res.name || name, validFrom: res.validFrom, classes: res.classes, monthly: res.monthly, note: res.note };
+            }
+            if (!st) {
+                status.innerHTML = before;
+                if (readErr) throw readErr;
+                alert('In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.'
+                    + (isPdf && !draftAiReady() ? '\n\nBei eingescannten oder ungewöhnlich aufgebauten PDFs hilft die KI-Auswertung mit Claude (oben in den Einstellungen einrichten).' : ''));
+                return;
+            }
+            if (st.monthly && confirm('Die Beträge sehen nach Monatslöhnen aus. Für die Berechnung braucht es Jahreslöhne.\n\nOK = mit 13 multiplizieren (13 Monatslöhne)\nAbbrechen = Beträge unverändert übernehmen')) {
+                for (const k of Object.keys(st.classes)) st.classes[k] = st.classes[k].map(v => Math.round(v * 13 * 100) / 100);
+                st.note = [st.note, 'Monatslöhne × 13 umgerechnet'].filter(Boolean).join(' · ');
+            }
+            delete st.monthly;
             readSettingsForm();
             draft.salaryTable = st;
-            renderSalaryStatus();
+            renderSalaryStatus(true);
         } catch (err) {
+            status.innerHTML = before;
             alert('Die Datei konnte nicht gelesen werden: ' + err.message);
         }
     });

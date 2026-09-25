@@ -569,23 +569,60 @@
         });
     }
 
+    const CLASS_LABEL = /^\s*(?:lohnklasse|lk|klasse)?\s*(\d{1,2})\s*$/i;
+
+    const ANNUAL_LABEL = /jahres/i;
+    const OTHER_LABEL = /monat|auszahl|auzahl|zahlung|stunde|lektion|tag|woche|zulage|%/i;
+
     /**
-     * Gehaltstabelle aus Tabellenzeilen: erste Zelle = Lohnklasse (z. B. «12» oder «LK 12»),
-     * danach die Jahreslöhne der Stufen 1, 2, 3 … Kopf- und Leerzeilen werden übersprungen.
-     * @returns {{name, validFrom, classes: {[cls]: number[]}} | null}
+     * Zeilen mit Lohnklasse in der ersten Zelle und Löhnen danach → {klasse: [Stufe 1, 2, …]}.
+     * Hat eine Klasse mehrere Zeilen (Jahreslohn, Monatslohn, pro Stunde …), zählt «Jahreslohn»;
+     * Zeilen mit anderer Bezeichnung (z. B. «13 Auszahlungen», «pro Stunde») werden übersprungen.
+     */
+    function salaryRows(rows) {
+        const classes = {}, annual = {};
+        for (const row of rows) {
+            const m = CLASS_LABEL.exec(String(row[0] ?? ''));
+            if (!m) continue;
+            const rest = row.slice(1);
+            const label = rest.filter(c => String(c ?? '').trim() !== '' && parseAmount(c) === null).join(' ');
+            if (OTHER_LABEL.test(label)) continue;
+            const values = rest.map(parseAmount).filter(n => n !== null && n > 0);
+            if (!values.length || values.some(n => n < 100)) continue;
+            const cls = +m[1], isAnnual = ANNUAL_LABEL.test(label);
+            if (classes[cls] && (annual[cls] || !isAnnual)) continue;
+            classes[cls] = values.map(n => Math.round(n * 100) / 100);
+            annual[cls] = isAnnual;
+        }
+        return classes;
+    }
+
+    /**
+     * Gehaltstabelle aus Tabellenzeilen (Excel, CSV oder PDF): pro Zeile eine Lohnklasse
+     * (erste Zelle z. B. «12» oder «LK 12»), danach die Jahreslöhne der Stufen 1, 2, 3 …
+     * Kopf- und Leerzeilen werden übersprungen. Stehen die Stufen in den Zeilen («Stufe 1», …)
+     * oder die Lohnklassen im Kopf («LK 1», «LK 2», …), wird die Tabelle gedreht.
+     * @returns {{name, validFrom, classes: {[cls]: number[]}, monthly: boolean} | null}
      */
     function parseSalaryTable(rows, name) {
-        const classes = {};
-        for (const row of rows || []) {
-            const cells = row || [];
-            if (!cells.length) continue;
-            const m = /^\s*(?:lohnklasse|lk|klasse)?\s*(\d{1,2})\s*$/i.exec(String(cells[0] ?? ''));
-            if (!m) continue;
-            const values = cells.slice(1).map(parseAmount).filter(n => n !== null && n > 0);
-            if (!values.length || values.some(n => n < 100)) continue;
-            classes[+m[1]] = values.map(n => Math.round(n * 100) / 100);
+        rows = (rows || []).map(r => Array.isArray(r) ? r : []);
+        const stageRows = rows.filter(r => /^\s*stufe\s*\d+\s*$/i.test(String(r[0] ?? ''))).length;
+        const classHeader = rows.some(r => r.slice(1).filter(c => /^\s*(?:lohnklasse|lk|klasse)\s*\d{1,2}\s*$/i.test(String(c ?? ''))).length >= 2);
+        let classes;
+        if (stageRows >= 2 || classHeader) {
+            const width = Math.max(0, ...rows.map(r => r.length));
+            classes = salaryRows(Array.from({ length: width }, (_, j) => rows.map(r => r[j] ?? '')));
+        } else {
+            classes = salaryRows(rows);
         }
-        return Object.keys(classes).length ? { name: name || 'Gehaltstabelle', validFrom: null, classes } : null;
+        const all = Object.values(classes).flat().sort((a, b) => a - b);
+        if (!all.length) return null;
+        // Löhne unter 20'000 sind kaum Jahreslöhne → vermutlich Monatslöhne
+        const monthly = all[Math.floor(all.length / 2)] < 20000;
+        // «Stand: 01.01.2026» oder «gültig ab 1.1.2026» → Gültigkeitsbeginn
+        const date = /(?:stand|gültig\s+ab|gültig\s+per|per)\s*:?\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/i.exec(rows.map(r => r.join(' ')).join('\n'));
+        const validFrom = date ? `${date[3]}-${date[2].padStart(2, '0')}-${date[1].padStart(2, '0')}` : null;
+        return { name: name || 'Gehaltstabelle', validFrom, classes, monthly };
     }
 
     const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;

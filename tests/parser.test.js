@@ -168,3 +168,29 @@ assert.deepStrictEqual(P.parseSalaryTable(P.parseCsv('1\t50000\t51000'), 'x').cl
 assert.deepStrictEqual(P.parseSalaryTable([[12, 80000, 82000]], 'x').classes, { 12: [80000, 82000] });
 assert.strictEqual(P.parseSalaryTable(P.parseCsv('a;b\nc;d')), null);
 console.log('Gehaltstabelle-Tests bestanden.');
+
+// Gedrehte Tabelle: Stufen als Zeilen, Lohnklassen im Kopf
+const rot = P.parseSalaryTable([['Stufe', 'LK 1', 'LK 2'], ['Stufe 1', '50000', '60000'], ['Stufe 2', '51000', '61000']], 'r');
+assert.deepStrictEqual(rot.classes, { 1: [50000, 51000], 2: [60000, 61000] });
+assert.strictEqual(rot.monthly, false);
+const rot2 = P.parseSalaryTable([['', '1', '2'], ['Stufe 1', '50000', '60000'], ['Stufe 2', '51000', '61000']], 'r');
+assert.deepStrictEqual(rot2.classes, { 1: [50000, 51000], 2: [60000, 61000] });
+// Monatslöhne erkennen
+assert.strictEqual(P.parseSalaryTable([[12, 6500, 6700]], 'm').monthly, true);
+console.log('Gehaltstabelle (gedreht/Monat) bestanden.');
+
+// Mehrzeilige Klassen (Jahreslohn, 13/12 Auszahlungen, pro Stunde, pro Lektion)
+const multi = P.parseSalaryTable([
+    ['Klasse', 'Stufe', '1', '2'],
+    ['12', 'Jahreslohn', "82’160.95", "85’596.15"],
+    ['13 Auzahlungen', "6’320.05", "6’584.30"],
+    ['13', 'Auzahlungen', "6’320.05", "6’584.30"],
+    ['12', 'Auzahlungen', "6’846.75", "7’133.00"],
+    ['pro Stunde', '37.62', '39.19'],
+    ['13', 'Jahreslohn', "87’219.75", "90’771.60"]
+], 'g');
+assert.deepStrictEqual(multi.classes, { 12: [82160.95, 85596.15], 13: [87219.75, 90771.6] });
+assert.strictEqual(multi.monthly, false);
+console.log('Gehaltstabelle (mehrzeilig) bestanden.');
+assert.strictEqual(P.parseSalaryTable([['Stand:', '01.01.2026', 'Beträge in CHF'], ['4', 'Jahreslohn', '50000']], 'g').validFrom, '2026-01-01');
+assert.strictEqual(P.parseSalaryTable([['4', '50000']], 'g').validFrom, null);
