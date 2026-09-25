@@ -19,6 +19,19 @@ return [
     // So viele frühere Versionen der Einstellungen werden in api/data/history/ aufbewahrt
     'keep_versions' => 30,
 
+    // Datenbank für die ausgewerteten Personen (damit sie nach dem Neuladen noch da sind).
+    // Die Tabelle wird automatisch angelegt. Weglassen, wenn nichts gespeichert werden soll.
+    'db' => [
+        'host' => 'datenbank-server.example.ch',
+        'name' => 'datenbankname',
+        'user' => 'benutzername',
+        'password' => 'datenbank-passwort',
+        // 'port' => 3306,
+    ],
+
+    // Personen, die so viele Tage nicht mehr geändert wurden, werden automatisch gelöscht (Datenschutz)
+    'keep_days' => 180,
+
     // Maximale Grösse einer Anfrage in MB (PDFs werden Base64-kodiert, ca. +33 %)
     'max_request_mb' => 32,
 ];

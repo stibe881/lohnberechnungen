@@ -11,6 +11,7 @@
     const PRIVACY_KEY = 'cvrechner.privacy-ack.v1';
     const SERVER_URL = new URL('api/claude.php', location.href).href.replace(/\/$/, '');
     const SETTINGS_URL = new URL('api/settings.php', location.href).href;
+    const CANDIDATES_URL = new URL('api/candidates.php', location.href).href;
     const SHARED_KEY = 'cvrechner.shared.v1'; // Version der zuletzt geladenen/gespeicherten zentralen Einstellungen
     const CONCURRENCY = 3; // so viele Lebensläufe wertet Claude gleichzeitig aus
 
@@ -45,7 +46,7 @@
     }
     function saveSettings() { storageSet(SETTINGS_KEY, JSON.stringify(settings)); }
     function loadAi() {
-        const d = { enabled: false, mode: 'server', apiKey: '', password: '', adminPassword: '', model: '', textOnly: true, shared: true };
+        const d = { enabled: false, mode: 'server', apiKey: '', password: '', adminPassword: '', model: '', textOnly: true, shared: true, storeCandidates: true };
         try {
             const a = JSON.parse(storageGet(AI_KEY));
             if (a) return Object.assign(d, a, { mode: a.mode || (a.apiKey ? 'key' : 'server') });
@@ -484,9 +485,88 @@
             ? `✨ KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
             : ai.enabled
                 ? '⚠️ KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
-                : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
+                : storeActive() ? '🔒 Lebensläufe werden in diesem Browser ausgelesen und nicht an Claude gesendet.' : '🔒 Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
+        if (storeActive()) $('#privacy').innerHTML += `<br>💾 Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`;
         renderOverview();
         renderDetail();
+        scheduleSave();
+    }
+
+    // --- Auswertungen in der Datenbank (api/candidates.php) ---
+    let store = { available: false, enabled: false, keepDays: 0, problem: '', error: '' };
+    const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
+    const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
+        'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError'];
+    const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
+    const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
+    async function storeRequest(method, query, body) {
+        const res = await fetch(CANDIDATES_URL + (query || ''), {
+            method, cache: 'no-store',
+            headers: Object.assign({ 'x-app-password': ai.password || '' }, body ? { 'content-type': 'application/json' } : {}),
+            body: body ? JSON.stringify(body) : undefined
+        });
+        let data = {};
+        try { data = await res.json(); } catch (e) { /* keine JSON-Antwort */ }
+        if (!res.ok) throw new Error(data.error || `Fehler ${res.status}`);
+        return data;
+    }
+    async function checkStore() {
+        try {
+            const res = await fetch(CANDIDATES_URL + '?action=status', { cache: 'no-store' });
+            const d = res.ok ? await res.json() : null;
+            store = d ? Object.assign(store, { available: true, enabled: !!d.enabled, keepDays: d.keepDays || 0, problem: d.problem || '' }) : Object.assign(store, { available: false, enabled: false });
+        } catch (e) {
+            store.available = store.enabled = false;
+        }
+    }
+    /** Lädt die gespeicherten Personen (ergänzt, was noch nicht geladen ist). */
+    async function loadStored() {
+        await checkStore();
+        if (!storeActive()) return 0;
+        try {
+            const { candidates: list } = await storeRequest('GET');
+            let added = 0;
+            for (const c of list || []) {
+                if (candidates.some(x => x.id === c.id)) continue;
+                const cand = Object.assign(newCandidate(c.name || 'Unbenannt', c.text || '', null), c, { loading: false, pdfBase64: null });
+                if (!Array.isArray(cand.entries)) cand.entries = [];
+                candidates.push(cand);
+                savedJson.set(cand.id, persistable(cand));
+                added++;
+            }
+            if (added && !selectedId) selectedId = candidates[0].id;
+            store.error = '';
+            return added;
+        } catch (e) {
+            store.error = 'Gespeicherte Auswertungen konnten nicht geladen werden: ' + e.message;
+            setStatus(store.error, true);
+            return 0;
+        }
+    }
+    let saveTimer = null, saving = false;
+    /** Speichert geänderte Personen kurz nach der letzten Änderung. */
+    function scheduleSave() {
+        if (!storeActive()) return;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveChanged, 800);
+    }
+    async function saveChanged() {
+        if (saving) { scheduleSave(); return; }
+        saving = true;
+        try {
+            for (const c of candidates.filter(x => !x.loading)) {
+                const json = persistable(c);
+                if (savedJson.get(c.id) === json) continue;
+                await storeRequest('POST', '', { candidate: JSON.parse(json) });
+                savedJson.set(c.id, json);
+            }
+            if (store.error) { store.error = ''; setStatus('Auswertungen wieder gespeichert.'); }
+        } catch (e) {
+            if (!store.error) setStatus('Auswertung konnte nicht in der Datenbank gespeichert werden: ' + e.message, true);
+            store.error = e.message;
+        } finally {
+            saving = false;
+        }
     }
 
     function renderOverview() {
@@ -673,7 +753,14 @@
         const rm = e.target.closest('[data-remove]');
         if (rm) {
             const i = candidates.findIndex(c => c.id === rm.dataset.remove);
-            if (i >= 0) candidates.splice(i, 1);
+            if (i < 0) return;
+            if (savedJson.has(candidates[i].id)) {
+                if (!confirm(`«${candidates[i].name}» endgültig löschen? Die Auswertung wird auch aus der Datenbank entfernt.`)) return;
+                const id = candidates[i].id;
+                storeRequest('DELETE', '?id=' + encodeURIComponent(id)).then(() => savedJson.delete(id))
+                    .catch(err => setStatus('Konnte nicht aus der Datenbank gelöscht werden: ' + err.message, true));
+            }
+            candidates.splice(i, 1);
             if (selectedId === rm.dataset.remove) selectedId = candidates[0]?.id || null;
             render();
             return;
@@ -810,6 +897,13 @@
         $('#sharedEnabled').checked = draftAi.shared !== false;
         $('#sharedEnabled').disabled = !shared.enabled;
         $('#sharedStatus').innerHTML = sharedStatusHtml();
+        $('#storeCandidates').checked = draftAi.storeCandidates !== false;
+        $('#storeCandidates').disabled = !store.enabled;
+        $('#storeStatus').innerHTML = !store.available ? '<span class="warn">Keine Datenbank-Anbindung gefunden (braucht PHP-Hosting und api/candidates.php). Personen sind nach dem Neuladen weg.</span>'
+            : !store.enabled ? `<span class="warn">${esc(store.problem || 'Datenbank ist nicht eingerichtet.')}</span>`
+            : draftAi.storeCandidates === false ? 'Personen werden nicht gespeichert und sind nach dem Neuladen weg.'
+            : `<span class="ok">✓ Datenbank verbunden</span>${store.keepDays ? ` – Personen ohne Änderung werden nach ${store.keepDays} Tagen gelöscht` : ''}. PDF-Dateien werden nicht gespeichert, nur der erkannte Text und die Auswertung.`
+              + (store.error ? `<br><span class="warn">${esc(store.error)}</span>` : '');
         $('#aiTextOnly').checked = draftAi.textOnly;
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
         $('#serverStatus').innerHTML = server.configured
@@ -829,6 +923,7 @@
         draftAi.password = $('#aiPassword').value;
         draftAi.adminPassword = $('#adminPassword').value;
         draftAi.shared = $('#sharedEnabled').checked;
+        draftAi.storeCandidates = $('#storeCandidates').checked;
         draftAi.textOnly = $('#aiTextOnly').checked;
         draftAi.model = $('#aiModel').value;
     }
@@ -1118,6 +1213,8 @@
         renderSettingsForm(tplId);
         $('#settingsDialog').showModal();
         if (tplId) document.querySelector(`#tplList [data-tpl="${CSS.escape(tplId)}"] .rules-grid`)?.scrollIntoView({ block: 'center' });
+        await checkStore();
+        renderAiForm();
         if (window.CVAi) { server = await CVAi.checkServer(SERVER_URL); renderAiForm(); }
     }
     $('#openSettings').addEventListener('click', () => openSettings());
@@ -1334,6 +1431,7 @@
         ai = draftAi;
         storageSet(AI_KEY, JSON.stringify(ai));
         pushShared().catch(err => setStatus('Nur in diesem Browser gespeichert – Server nicht erreichbar: ' + err.message, true));
+        loadStored().then(n => { if (n) render(); scheduleSave(); });
         if (ai.enabled && !aiReady()) setStatus(ai.mode === 'server' ? 'KI-Auswertung ist eingeschaltet, aber der Server ist nicht eingerichtet.' : 'KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
         const ids = new Set(allCats().map(c => c.id));
         for (const c of candidates) {
@@ -1370,6 +1468,8 @@ Deutsch, Englisch`;
     pullShared().then(changed => {
         if (changed) { render(); setStatus(`Zentrale Einstellungen geladen (Version ${sharedMeta.version}).`); }
         else if (shared.error) setStatus(shared.error, true);
-    }).catch(() => {});
+    }).catch(() => {}).then(loadStored).then(n => {
+        if (n) { render(); setStatus(`${n} gespeicherte Auswertung${n > 1 ? 'en' : ''} geladen.`); }
+    });
     if (window.CVAi) initServer(); else window.addEventListener('cvai-ready', initServer, { once: true });
 })();

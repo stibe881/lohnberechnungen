@@ -18,6 +18,8 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Bericht (PDF)** pro Person oder für alle: Regeln, Rechenweg, Zeitstrahl, Stellenliste und Unterschriftenfeld «Geprüft durch». Hält fest, womit gerechnet wurde: verwendete Gehaltstabelle mit Gültigkeit, Version der zentralen Einstellungen und Zeitpunkt der Berechnung. Öffnet den Druckdialog, dort «Als PDF speichern» wählen.
 - **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «✎ manuell» markiert, im Bericht vermerkt und im CSV gezählt.
 - **Zentrale Einstellungen:** Vorlagen, Berufe und Gehaltstabellen liegen auf dem Server, alle Nutzenden rechnen mit demselben Stand (siehe «Server einrichten»).
+- **Auswertungen speichern:** Mit Datenbank (MySQL/MariaDB) bleiben ausgewertete Personen nach dem Neuladen erhalten (siehe «Datenbank»).
+- **Funktion automatisch vorschlagen:** Aus Ausbildung und Tätigkeiten im Lebenslauf schlägt die App die passende Vorlage (Funktion des Einreihungsplans) vor – mit Claude oder über Stichwörter pro Vorlage – samt Begründung und Alternativen.
 - **CSV-Export** der Übersicht und aller Stellen.
 
 ## KI-Auswertung mit Claude (optional)
@@ -43,6 +45,15 @@ Voraussetzung: Webhosting mit PHP 7.4+ und der cURL-Erweiterung (bei Schweizer H
 3. In der App unter «Einstellungen» die Option «Über euren Server» wählen und das Passwort eingeben. Der Status zeigt «Server ist eingerichtet».
 
 Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei falscher Eingabe), nur `POST /v1/messages`, nur freigegebene Modelle, Grössenlimit. `config.php` ist per `.htaccess` gesperrt und steht in `.gitignore`.
+
+### Datenbank (ausgewertete Personen speichern)
+
+Mit `api/candidates.php` werden die ausgewerteten Personen in einer MySQL-/MariaDB-Datenbank gespeichert. In `config.php` den Block `db` mit Server, Datenbankname, Benutzer und Passwort ausfüllen (siehe `config.sample.php`); die Tabelle `lr_candidates` wird beim ersten Aufruf automatisch angelegt.
+
+- Gespeichert werden Name, Geburtsdatum, erkannter Text, Stellen, gewählte Vorlage und Anpassungen – **keine PDF-Dateien**. «Neu auswerten» arbeitet nach dem Neuladen mit dem gespeicherten Text.
+- Änderungen werden automatisch gespeichert. Alle mit Zugangspasswort sehen dieselben Personen; «✕» in der Übersicht löscht eine Person endgültig.
+- Personen, die `keep_days` Tage (Standard 180) nicht geändert wurden, werden automatisch gelöscht. Die Frist an die internen Vorgaben zur Aufbewahrung von Bewerbungsunterlagen anpassen.
+- Zugangsdaten der Datenbank gehören nur in `config.php` auf dem Server, nie ins Repository.
 
 ### Zentrale Einstellungen
 
@@ -90,6 +101,9 @@ Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
 - **Lohnklasse:** tiefste Klasse der Funktion, +1 nach jeder Jahresgrenze (z. B. 12 und 24 Jahre), höchstens bis zur obersten Klasse der Funktion.
 - **Korrektur:** pro Person wählbar, z. B. −1 Klasse bei fehlender Ausbildung oder +1 mit Obergrenze.
 - **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn. Pro Vorlage einstellbar: 13 oder 12 Auszahlungen (der andere Betrag steht zum Vergleich daneben).
+- **Funktion (Vorlage):** Oben «Funktion automatisch vorschlagen» wählen: Die App wählt pro Person die passende Vorlage. Mit KI-Auswertung entscheidet Claude anhand von Ausbildung und Erfahrung, sonst zählen die «Stichwörter für den automatischen Vorschlag» der Vorlagen (aktuelle Tätigkeit und jüngste Ausbildung am stärksten). Vorschlag, Begründung und Alternativen stehen bei der Person und im Bericht; die Vorlage lässt sich jederzeit ändern.
+- **Gemäss Grundfunktion:** Vorlagen wie «Teamleitung: gemäss Grundfunktion plus 1, max. 18» übernehmen die Lohnklassen einer anderen Vorlage; die Grundfunktion lässt sich pro Person wählen.
+- **Fixer Lohn:** Funktionen mit festem Jahreslohn (z. B. Praktika) statt Lohnklasse.
 - **Lektionen:** Ist in der Vorlage «Lektionen bei 100 %» gesetzt (z. B. 28), wird für die neue Stelle die Anzahl Lektionen eingegeben; das Pensum ergibt sich daraus. Enthält die Gehaltstabelle «pro Lektion» (sonst «pro Stunde»), steht der Ansatz im Lohnvorschlag.
 
 **Gehaltstabellen** werden unter Einstellungen → Gehaltstabellen als PDF-, Excel- oder CSV-Datei hochgeladen: eine Zeile pro Lohnklasse, in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … bei 100 %.
@@ -107,7 +121,7 @@ Einstellungen aus früheren Versionen werden beim Öffnen automatisch übernomme
 
 ## Datenschutz
 
-Ohne KI-Auswertung werden die Dateien ausschliesslich lokal im Browser verarbeitet und nicht hochgeladen oder gespeichert. Nach dem Neuladen der Seite sind die Lebensläufe weg, nur die Einstellungen bleiben erhalten.
+Die Dateien werden im Browser ausgelesen. Ohne KI-Auswertung und ohne Datenbank werden sie nirgends hochgeladen oder gespeichert; nach dem Neuladen der Seite sind die Lebensläufe weg, nur die Einstellungen bleiben erhalten. Mit Datenbank werden erkannter Text und Auswertung (ohne PDF) auf eurem Server gespeichert und nach `keep_days` Tagen gelöscht.
 
 ## Grenzen
 
