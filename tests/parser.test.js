@@ -153,3 +153,18 @@ assert.deepStrictEqual(norm.templates[1].related, ['a']);
 assert.strictEqual(norm.templates[0].rules.other.factor, 40);
 
 console.log('Alle Tests bestanden.');
+
+// Gehaltstabelle aus CSV / Excel
+assert.strictEqual(P.parseAmount("85'432.50"), 85432.5);
+assert.strictEqual(P.parseAmount('CHF 85 432'), 85432);
+assert.strictEqual(P.parseAmount('85.432,50'), 85432.5);
+assert.strictEqual(P.parseAmount('85.432'), 85432);
+assert.strictEqual(P.parseAmount('85432,5'), 85432.5);
+assert.strictEqual(P.parseAmount('Stufe'), null);
+const csvRows = P.parseCsv('Lohnklasse;Stufe 1;Stufe 2;Stufe 3\n"LK 12";"80\'000";"82\'000";"84\'000"\n13;90000;92000;94000\n\nBemerkung;x\n');
+const st = P.parseSalaryTable(csvRows, 'Test');
+assert.deepStrictEqual(st.classes, { 12: [80000, 82000, 84000], 13: [90000, 92000, 94000] });
+assert.deepStrictEqual(P.parseSalaryTable(P.parseCsv('1\t50000\t51000'), 'x').classes, { 1: [50000, 51000] });
+assert.deepStrictEqual(P.parseSalaryTable([[12, 80000, 82000]], 'x').classes, { 12: [80000, 82000] });
+assert.strictEqual(P.parseSalaryTable(P.parseCsv('a;b\nc;d')), null);
+console.log('Gehaltstabelle-Tests bestanden.');

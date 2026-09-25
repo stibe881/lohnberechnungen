@@ -117,8 +117,13 @@
             <button class="btn btn-ghost" type="button" id="addTpl">+ Vorlage hinzufügen</button>
 
             <h3>Gehaltstabelle</h3>
-            <div class="salary-row"><p class="hint" id="salaryStatus"></p><button class="btn btn-ghost btn-sm" type="button" id="removeSalary">Entfernen</button></div>
-            <p class="hint">Die Gehaltstabelle (Jahreslohn je Lohnklasse und Stufe 1–10) wird mit einer Einstellungsdatei importiert. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
+            <div class="salary-row"><p class="hint" id="salaryStatus"></p>
+                <div class="row-gap">
+                    <label class="btn btn-ghost btn-sm">Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".xlsx,.xls,.ods,.csv,.txt,text/csv" hidden></label>
+                    <button class="btn btn-ghost btn-sm" type="button" id="removeSalary">Entfernen</button>
+                </div>
+            </div>
+            <p class="hint">Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
 
             <h3>Berufe</h3>
             <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>

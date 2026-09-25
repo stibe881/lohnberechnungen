@@ -527,6 +527,67 @@
         return { years: y, cls, stage, baseCls: tpl.classMin, ups, adjustment: adj, salary: row ? row[stage - 1] : null };
     }
 
+    /** Zahl aus einer Tabellenzelle: 85432, «85'432.50», «CHF 85 432», «85.432,50». Sonst null. */
+    function parseAmount(v) {
+        if (typeof v === 'number') return isFinite(v) ? v : null;
+        let t = String(v ?? '').replace(/chf|fr\.|sfr/gi, '').replace(/['’\s ]/g, '');
+        if (!/^-?[\d.,]+$/.test(t)) return null;
+        const dot = t.lastIndexOf('.'), comma = t.lastIndexOf(',');
+        if (dot >= 0 && comma >= 0) {
+            const dec = dot > comma ? '.' : ',';
+            t = t.split(dec === '.' ? ',' : '.').join('').replace(',', '.');
+        } else if (comma >= 0) {
+            t = /,\d{3}$/.test(t) ? t.replace(/,/g, '') : t.replace(',', '.');
+        } else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) {
+            t = t.replace(/\./g, '');
+        }
+        const n = parseFloat(t);
+        return isFinite(n) ? n : null;
+    }
+
+    /** Zerlegt CSV/Text aus Excel (Trennzeichen ; Tab oder , – wird erkannt) in Zeilen und Zellen. */
+    function parseCsv(text) {
+        const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
+        const sample = lines.slice(0, 5).join('\n');
+        const count = ch => sample.split(ch).length - 1;
+        const sep = count('\t') ? '\t' : count(';') ? ';' : ',';
+        return lines.map(line => {
+            const cells = [];
+            let cur = '', q = false;
+            for (let i = 0; i < line.length; i++) {
+                const ch = line[i];
+                if (q) {
+                    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+                    else if (ch === '"') q = false;
+                    else cur += ch;
+                } else if (ch === '"') q = true;
+                else if (ch === sep) { cells.push(cur); cur = ''; }
+                else cur += ch;
+            }
+            cells.push(cur);
+            return cells.map(c => c.trim());
+        });
+    }
+
+    /**
+     * Gehaltstabelle aus Tabellenzeilen: erste Zelle = Lohnklasse (z. B. «12» oder «LK 12»),
+     * danach die Jahreslöhne der Stufen 1, 2, 3 … Kopf- und Leerzeilen werden übersprungen.
+     * @returns {{name, validFrom, classes: {[cls]: number[]}} | null}
+     */
+    function parseSalaryTable(rows, name) {
+        const classes = {};
+        for (const row of rows || []) {
+            const cells = row || [];
+            if (!cells.length) continue;
+            const m = /^\s*(?:lohnklasse|lk|klasse)?\s*(\d{1,2})\s*$/i.exec(String(cells[0] ?? ''));
+            if (!m) continue;
+            const values = cells.slice(1).map(parseAmount).filter(n => n !== null && n > 0);
+            if (!values.length || values.some(n => n < 100)) continue;
+            classes[+m[1]] = values.map(n => Math.round(n * 100) / 100);
+        }
+        return Object.keys(classes).length ? { name: name || 'Gehaltstabelle', validFrom: null, classes } : null;
+    }
+
     const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;
 
     /** Sucht das Geburtsdatum im Text. Gibt 'YYYY-MM' oder '' zurück. */
@@ -543,7 +604,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTable = null;
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

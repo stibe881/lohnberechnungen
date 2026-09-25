@@ -79,7 +79,7 @@ Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
 - **Korrektur:** pro Person wählbar, z. B. −1 Klasse bei fehlender Ausbildung oder +1 mit Obergrenze.
 - **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn (13×).
 
-Gehaltstabelle, Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert. Interne Reglemente, Einstellungsdateien und Lohntabellen gehören **nicht** in dieses Repository, denn es ist öffentlich. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert. Die `.gitignore` schliesst `*einstellungen*.json` vorsorglich aus.
+Die **Gehaltstabelle** wird unter Einstellungen → Gehaltstabelle als Excel- oder CSV-Datei hochgeladen: eine Zeile pro Lohnklasse, in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … bei 100 %. Überschriften werden übersprungen. Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert; sie kann auch die Gehaltstabelle enthalten. Interne Reglemente, Einstellungsdateien und Lohntabellen gehören **nicht** in dieses Repository, denn es ist öffentlich. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert. Die `.gitignore` schliesst `*einstellungen*.json` vorsorglich aus.
 
 Beispiel mit den Standardregeln: 10 Jahre Berufserfahrung, davon 5 als Lehrperson, Vorlage «Lehrperson» → 5 × 100 % + 5 × 50 % = **7,5 Jahre**.
 

@@ -752,7 +752,7 @@
         const st = draft.salaryTable;
         const cls = st ? Object.keys(st.classes).map(Number).sort((a, b) => a - b) : [];
         $('#salaryStatus').innerHTML = st
-            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]}`
+            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]} · ${Math.max(...cls.map(k => st.classes[k].length))} Stufen`
             : 'Keine Gehaltstabelle hinterlegt.';
         $('#removeSalary').hidden = !st;
     }
@@ -844,6 +844,40 @@
             const t = Object.assign(clone(src), { id: P.makeTemplate(src.target).id, name: src.name + ' (Kopie)' });
             draft.templates.splice(draft.templates.indexOf(src) + 1, 0, t);
             renderTemplatesForm(t.id);
+        }
+    });
+    const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    let xlsxLoading = null;
+    function loadXlsx() {
+        if (window.XLSX) return Promise.resolve(window.XLSX);
+        xlsxLoading = xlsxLoading || new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = XLSX_URL;
+            s.onload = () => resolve(window.XLSX);
+            s.onerror = () => { xlsxLoading = null; reject(new Error('Excel-Leser konnte nicht geladen werden')); };
+            document.head.appendChild(s);
+        });
+        return xlsxLoading;
+    }
+    /** Liest Excel (erstes Blatt) oder CSV in Zeilen und Zellen. */
+    async function readTableFile(f) {
+        if (/\.(csv|txt)$/i.test(f.name)) return P.parseCsv(await f.text());
+        const X = await loadXlsx();
+        const wb = X.read(await f.arrayBuffer(), { type: 'array' });
+        return X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    }
+    $('#uploadSalary').addEventListener('change', async e => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
+        try {
+            const st = P.parseSalaryTable(await readTableFile(f), f.name.replace(/\.[^.]+$/, ''));
+            if (!st) { alert('In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.'); return; }
+            readSettingsForm();
+            draft.salaryTable = st;
+            renderSalaryStatus();
+        } catch (err) {
+            alert('Die Datei konnte nicht gelesen werden: ' + err.message);
         }
     });
     $('#removeSalary').addEventListener('click', () => {
