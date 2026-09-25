@@ -206,6 +206,21 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 .loading-cell { color: var(--muted); font-size: .85rem; }
 .spinner { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
 
+/* Lohneinreihung */
+.placement { border: 1px solid var(--good); background: var(--good-soft); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+.placement-main { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.placement-main .label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--good); }
+.placement-why { font-size: .78rem; color: var(--muted); margin-top: 3px; }
+.r-placement { font-size: 9.5pt; border: 1.5px solid #111; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.r-placement span { font-size: 8pt; color: #555; }
+
+/* Regeln einer Vorlage */
+.rules-grid { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(170px, 1.6fr) minmax(90px, .7fr) minmax(90px, .7fr); gap: 6px 10px; align-items: center; }
+.rg-head { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rg-name { font-size: .85rem; font-weight: 600; }
+.rules-grid input:disabled { opacity: .4; }
+.salary-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
 /* Zeitstrahl */
 .timeline-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .timeline { display: block; width: 100%; min-width: 640px; height: auto; font-family: inherit; }
@@ -284,5 +299,8 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
     .grid-4 { grid-template-columns: 1fr 1fr; }
     .grid-2 { grid-template-columns: 1fr; }
     .cat-item { grid-template-columns: 1fr; }
+    .rules-grid { grid-template-columns: 1fr 1fr; }
+    .rules-grid .rg-head:nth-child(n+3) { display: none; }
+    .rules-grid .rg-name { grid-column: 1 / -1; margin-top: 6px; }
     .topbar-inner { align-items: flex-start; }
 }

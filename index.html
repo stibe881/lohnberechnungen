@@ -62,6 +62,7 @@
                             <th class="num">im Zielberuf</th>
                             <th class="num">andere Berufe</th>
                             <th class="num">Anrechenbar</th>
+                            <th class="num">Einreihung</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -114,6 +115,10 @@
             <p class="hint">Eine Vorlage enthält die Anrechnungsregeln für eine Stelle, z. B. nach eurem Lohnreglement. Beim Hochladen wählst du oben die Vorlage aus.</p>
             <div id="tplList" class="tpl-list"></div>
             <button class="btn btn-ghost" type="button" id="addTpl">+ Vorlage hinzufügen</button>
+
+            <h3>Gehaltstabelle</h3>
+            <div class="salary-row"><p class="hint" id="salaryStatus"></p><button class="btn btn-ghost btn-sm" type="button" id="removeSalary">Entfernen</button></div>
+            <p class="hint">Die Gehaltstabelle (Jahreslohn je Lohnklasse und Stufe 1–10) wird mit einer Einstellungsdatei importiert. Vorlagen mit Lohnklassen zeigen damit einen Lohnvorschlag.</p>
 
             <h3>Berufe</h3>
             <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>

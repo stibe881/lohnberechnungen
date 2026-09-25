@@ -38,26 +38,46 @@ Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei fals
 
 ## Berechnung
 
-Die Regeln stehen in **Vorlagen** (Einstellungen → Vorlagen). Pro Vorlage einstellbar:
+Die Regeln stehen in **Vorlagen** (Einstellungen → Vorlagen), eine pro Stelle. Für jede Tätigkeitsart legt die Vorlage eine Anrechnung fest:
 
-| Regel | Standard |
+| Tätigkeitsart | Standard |
 | --- | --- |
-| Zielberuf (gleicher Beruf) | 100 % |
+| Gleicher Beruf (Zielberuf) | 100 % |
 | Verwandte Berufe (frei wählbar) | 75 % |
 | Andere Berufe | 50 % |
-| Ausbildung (Schule, Lehre, Studium) | 0 % |
+| Praktikum | 50 % |
+| Assistenz-Einsatz | 50 % |
 | Familienarbeit | 50 %, optional mit Höchstdauer |
 | Militär-/Zivildienst | 50 % |
-| Anrechnung ab Alter | keine (braucht Geburtsdatum) |
-| Höchstens anrechenbare Jahre | kein Maximum |
-| Rundung | nicht runden (wählbar: auf halbe oder ganze Jahre abrunden, auf ganze Jahre runden) |
-| Teilzeit anteilig | aus |
+| Erstausbildung / Schule | 0 % |
+| Zweitausbildung | 0 % |
 
-Ablauf: Überschneidende Zeiträume werden nie doppelt gezählt, pro Monat zählt die Tätigkeit mit dem höchsten Faktor. Danach folgen Mindestalter, Obergrenze Familienarbeit, Maximum und zuletzt die Rundung. Der Rechenweg wird in der App und im Bericht angezeigt.
+Jede Anrechnung hat eine von drei **Anrechnungsarten**:
+- **Faktor (Pensum egal):** z. B. 50 % der Zeit.
+- **Faktor × Pensum:** z. B. «25 % vom geleisteten Pensum» → 80 % Pensum ergibt 20 %.
+- **Nach Pensum:** ein Wert bis 50 % Pensum, ein anderer über 50 % (z. B. 50 % / 100 %).
 
-Beispiel: 10 Jahre Berufserfahrung, davon 5 als Lehrperson, Vorlage «Lehrperson» → 5 × 100 % + 5 × 50 % = **7,5 Jahre**.
+Weitere Regeln pro Vorlage:
+- **Gleichzeitige Tätigkeiten:** Entweder zählt die höchste Anrechnung, oder alle werden addiert, höchstens 100 % pro Monat.
+- **Stichtag:** heute oder 31.12. des laufenden Jahres.
+- **Anrechnung ab Alter** (braucht Geburtsdatum), **höchstens anrechenbare Jahre**, **Rundung**.
+- **Lohneinreihung (optional):** Lohnklasse von–bis und Klassenaufstieg nach Jahren (Standard 12 und 24).
 
-Einstellungen aus der ersten Version (globale Faktoren) werden beim ersten Öffnen automatisch in Vorlagen übernommen. Export/Import als JSON ist möglich (ohne API-Schlüssel und Passwort).
+Ablauf: Monat für Monat wird die Anrechnung bestimmt, danach folgen Mindestalter, Obergrenze Familienarbeit, Maximum und zuletzt die Rundung. Rechenweg und Regeln stehen in der App und im Bericht.
+
+### Lohneinreihung
+
+Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
+- **Lohnstufe:** volle anrechenbare Jahre + 1, höchstens Stufe 10.
+- **Lohnklasse:** tiefste Klasse der Funktion, +1 nach jeder Jahresgrenze (z. B. 12 und 24 Jahre), höchstens bis zur obersten Klasse der Funktion.
+- **Korrektur:** pro Person wählbar, z. B. −1 Klasse bei fehlender Ausbildung oder +1 mit Obergrenze.
+- **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn (13×).
+
+Gehaltstabelle, Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert. Interne Reglemente und Lohntabellen gehören **nicht** in dieses Repository, da die Seite öffentlich erreichbar ist. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert.
+
+Beispiel mit den Standardregeln: 10 Jahre Berufserfahrung, davon 5 als Lehrperson, Vorlage «Lehrperson» → 5 × 100 % + 5 × 50 % = **7,5 Jahre**.
+
+Einstellungen aus früheren Versionen werden beim Öffnen automatisch übernommen. Export/Import als JSON ist möglich (ohne API-Schlüssel und Passwort).
 
 ## Datenschutz
 

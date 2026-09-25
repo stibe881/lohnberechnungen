@@ -31,12 +31,13 @@
      * @param {Array}  o.perEntry   Ergebnis von CVParser.compute(...).perEntry
      * @param {Function} o.catName  Kategorie-ID -> Name
      * @param {number} [o.minAgeMonth]  Monat, ab dem angerechnet wird (Mindestalter)
+     * @param {number} [o.endMonth]  letzter gezählter Monat (Stichtag), Standard: aktueller Monat
      * @param {Date}   [o.today]
      * @returns {string} SVG + Legende als HTML, '' wenn keine gültigen Einträge
      */
     function render(o) {
         const today = o.today || new Date();
-        const nowIdx = today.getFullYear() * 12 + today.getMonth();
+        const nowIdx = o.endMonth ?? (today.getFullYear() * 12 + today.getMonth());
         const rows = [];
         o.entries.forEach((e, i) => {
             const s = idx(e.start);

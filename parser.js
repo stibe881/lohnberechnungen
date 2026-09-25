@@ -115,12 +115,15 @@
     const EDU_RE = /(studium|studiengang|student(?:in)?\b|gymnasium|kantonsschule|matura|maturität|bachelor|master of|master\b|diplomstudium|lehrdiplom|lehrabschluss|lehre als|lehre zum|lehre zur|ausbildung zu|ausbildung als|berufslehre|berufsschule|sekundarschule|primarschule|realschule|bezirksschule|obligatorische schule|university|universität|hochschule|fachhochschule|\bph\b|\beth\b|\bcas\b|\bdas\b|\bmas\b|weiterbildung|zertifikat|certificate|degree)/i;
 
     // --- Standardeinstellungen ---
-    // Feste Sonderkategorien (nicht löschbar), mit eigenen Faktoren in den Vorlagen
+    // Feste Sonderkategorien (nicht löschbar), mit eigenen Regeln in den Vorlagen
     const SPECIAL_CATEGORIES = [
+        { id: '__praktikum', name: 'Praktikum', keywords: ['praktikum', 'praktikant', 'praktikantin', 'vorpraktikum', 'internship', 'intern ', 'stage '] },
+        { id: '__assistenz', name: 'Assistenz-Einsatz', keywords: ['klassenassistenz', 'schulassistenz', 'pädagogische assistenz', 'pädagogischer assistent', 'pädagogische assistentin', 'betreuungsassistenz', 'unterrichtsassistenz', 'assistenzeinsatz', 'assistenz-einsatz'] },
         { id: '__familie', name: 'Familienarbeit', keywords: ['familienarbeit', 'familienpause', 'familienzeit', 'familienphase', 'elternzeit', 'elternurlaub', 'mutterschaft', 'hausfrau', 'hausmann', 'betreuung der eigenen kinder', 'betreuung eigener kinder', 'erziehungsarbeit', 'erziehungszeit'] },
         { id: '__dienst', name: 'Militär-/Zivildienst', keywords: ['militärdienst', 'militär', 'rekrutenschule', 'unteroffiziersschule', 'offiziersschule', 'durchdiener', 'zivildienst', 'zivi ', 'zivilschutz'] },
         { id: '__sonstige', name: 'Sonstige', keywords: [] },
-        { id: '__ausbildung', name: 'Ausbildung', keywords: [] }
+        { id: '__ausbildung', name: 'Erstausbildung / Schule', keywords: [] },
+        { id: '__zweitausbildung', name: 'Zweitausbildung', keywords: ['zweitausbildung', 'zweitstudium', 'zweitlehre', 'zweite ausbildung'] }
     ];
 
     const ROUNDING = [
@@ -130,6 +133,30 @@
         { id: 'nearest', name: 'auf ganze Jahre runden' }
     ];
 
+    /** Anrechnungsarten: wie Pensum und Faktor zusammenspielen */
+    const MODES = [
+        { id: 'flat', name: 'Faktor (Pensum egal)' },
+        { id: 'pensum', name: 'Faktor × Pensum' },
+        { id: 'threshold', name: 'nach Pensum: bis 50 % / über 50 %' }
+    ];
+
+    /** Regelgruppen einer Vorlage (Reihenfolge = Anzeige) */
+    const RULE_KEYS = [
+        { id: 'same', name: 'Gleicher Beruf (Zielberuf)' },
+        { id: 'related', name: 'Verwandte Berufe' },
+        { id: 'other', name: 'Andere Berufe' },
+        { id: 'internship', name: 'Praktikum' },
+        { id: 'assistance', name: 'Assistenz-Einsatz' },
+        { id: 'family', name: 'Familienarbeit' },
+        { id: 'service', name: 'Militär-/Zivildienst' },
+        { id: 'education', name: 'Erstausbildung / Schule' },
+        { id: 'secondEducation', name: 'Zweitausbildung' }
+    ];
+    const TARGETABLE_SPECIALS = ['__assistenz', '__praktikum']; // als Zielberuf einer Vorlage wählbar
+    const CATEGORY_RULE = { __praktikum: 'internship', __assistenz: 'assistance', __familie: 'family', __dienst: 'service', __ausbildung: 'education', __zweitausbildung: 'secondEducation' };
+
+    const rule = (factor, mode, low) => ({ mode: mode || 'flat', factor, low: low ?? Math.round(factor / 2) });
+
     /** Anrechnungsregeln für eine Stelle (Vorlage). */
     function makeTemplate(target, name) {
         return {
@@ -137,18 +164,41 @@
             name: name || 'Neue Vorlage',
             target,
             related: [],
-            sameFactor: 100,
-            relatedFactor: 75,
-            otherFactor: 50,
-            educationFactor: 0,
-            familyFactor: 50,
+            rules: {
+                same: rule(100), related: rule(75), other: rule(50),
+                internship: rule(50), assistance: rule(50), family: rule(50), service: rule(50),
+                education: rule(0), secondEducation: rule(0)
+            },
+            combine: 'max',        // 'max' = pro Monat zählt die höchste Anrechnung, 'sum' = summiert bis 100 %
             familyMaxYears: null,
-            serviceFactor: 50,
-            pensumMode: false,
             minAge: null,
             maxYears: null,
-            rounding: 'none'
+            rounding: 'none',
+            cutoff: 'today',       // 'today' | 'yearEnd' (Stichtag 31.12. des laufenden Jahres)
+            classMin: null,        // Lohneinreihung (optional): tiefste/höchste Lohnklasse der Funktion
+            classMax: null,
+            classUpYears: [12, 24] // Aufstieg in die nächste Lohnklasse nach so vielen Jahren
         };
+    }
+
+    /** Übernimmt Vorlagen der Version 2 (Faktoren als einzelne Felder, pensumMode). */
+    function upgradeTemplate(t) {
+        const out = Object.assign(makeTemplate(t.target), t);
+        if (!t.rules) {
+            const mode = t.pensumMode ? 'pensum' : 'flat';
+            const map = { same: 'sameFactor', related: 'relatedFactor', other: 'otherFactor', family: 'familyFactor', service: 'serviceFactor', education: 'educationFactor' };
+            for (const [k, f] of Object.entries(map)) out.rules[k] = rule(t[f] !== undefined ? t[f] : out.rules[k].factor, k === 'family' || k === 'education' ? 'flat' : mode);
+            out.rules.internship = Object.assign({}, out.rules.other);
+            out.rules.assistance = Object.assign({}, out.rules.other);
+            out.rules.secondEducation = Object.assign({}, out.rules.education);
+            out.combine = t.pensumMode ? 'sum' : 'max';
+            ['sameFactor', 'relatedFactor', 'otherFactor', 'educationFactor', 'familyFactor', 'serviceFactor', 'pensumMode'].forEach(k => delete out[k]);
+        } else {
+            const base = makeTemplate(t.target).rules;
+            out.rules = Object.assign({}, base, t.rules);
+        }
+        if (!Array.isArray(out.classUpYears)) out.classUpYears = [12, 24];
+        return out;
     }
 
     const DEFAULT_SETTINGS = {
@@ -166,25 +216,31 @@
 
     /** Ergänzt fehlende Felder und übernimmt Einstellungen aus älteren Versionen (globale Faktoren, «verwandt» je Beruf). */
     function normalizeSettings(s) {
-        const out = { categories: [], templates: [] };
+        const out = { categories: [], templates: [], classAdjustments: [], salaryTable: null };
         out.categories = (s.categories || []).map(c => ({ id: c.id, name: c.name, keywords: c.keywords || [] }));
         if (Array.isArray(s.templates) && s.templates.length) {
-            out.templates = s.templates.map(t => Object.assign(makeTemplate(t.target), t));
+            out.templates = s.templates.map(upgradeTemplate);
         } else {
             out.templates = (s.categories || []).map(c => {
-                const t = makeTemplate(c.id, c.name);
-                t.id = 't_' + c.id;
-                for (const k of ['sameFactor', 'relatedFactor', 'otherFactor', 'educationFactor', 'pensumMode', 'maxYears']) if (s[k] !== undefined) t[k] = s[k];
-                t.related = (c.related || []).slice();
-                (s.categories || []).forEach(o => { if ((o.related || []).includes(c.id) && !t.related.includes(o.id)) t.related.push(o.id); });
-                return t;
+                const old = { target: c.id, name: c.name, related: (c.related || []).slice() };
+                for (const k of ['sameFactor', 'relatedFactor', 'otherFactor', 'educationFactor', 'pensumMode', 'maxYears']) if (s[k] !== undefined) old[k] = s[k];
+                (s.categories || []).forEach(o => { if ((o.related || []).includes(c.id) && !old.related.includes(o.id)) old.related.push(o.id); });
+                return Object.assign(upgradeTemplate(old), { id: 't_' + c.id });
             });
         }
         const ids = new Set(out.categories.map(c => c.id));
+        const targets = new Set([...ids, ...TARGETABLE_SPECIALS]);
         out.templates.forEach(t => { t.related = (t.related || []).filter(r => ids.has(r)); });
-        out.templates = out.templates.filter(t => ids.has(t.target));
+        out.templates = out.templates.filter(t => targets.has(t.target));
+        out.classAdjustments = Array.isArray(s.classAdjustments) ? s.classAdjustments : DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
+        if (s.salaryTable && s.salaryTable.classes) out.salaryTable = s.salaryTable;
         return out;
     }
+
+    const DEFAULT_ADJUSTMENTS = [
+        { id: 'minus1', label: '−1 Klasse (z. B. fehlende Ausbildung für die Funktion)', delta: -1, cap: null },
+        { id: 'plus1', label: '+1 Klasse', delta: 1, cap: null }
+    ];
 
     function classify(title, details, categories) {
         const t = ' ' + (title || '').toLowerCase() + ' ';
@@ -257,6 +313,8 @@
 
             const cls = classify(title, details, settings.categories.concat(SPECIAL_CATEGORIES));
             let category = cls.category || '__sonstige';
+            // Praktikum hat Vorrang vor dem Fachgebiet (z. B. «Praktikum Heilpädagogische Schule»)
+            if (/praktik|internship/i.test(title)) category = '__praktikum';
             let isEdu = section === 'education';
             if (!isEdu && section !== 'experience' && !cls.titleHit && EDU_RE.test(title)) isEdu = true;
             if (isEdu) category = '__ausbildung';
@@ -276,7 +334,22 @@
                 imprecise: r.imprecise
             });
         }
+        markSecondEducation(entries);
         return entries;
+    }
+
+    const VOCATIONAL_RE = /(lehre|lehrabschluss|efz|eba|studium|bachelor|master|diplom|\bhf\b|\bfh\b|höhere fachschule|fachhochschule|universität|hochschule|ausbildung (?:zur|zum|als))/i;
+
+    /** Erste Lehre/erstes Studium bleibt Erstausbildung, spätere Berufsausbildungen werden Zweitausbildung. */
+    function markSecondEducation(entries) {
+        const edu = entries.filter(e => e.category === '__ausbildung' && VOCATIONAL_RE.test(e.title))
+            .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+        const first = edu[0];
+        if (!first) return;
+        const firstEnd = first.ongoing ? '9999-12' : first.end;
+        edu.slice(1).forEach(e => {
+            if ((e.start || '') > firstEnd) { e.category = '__zweitausbildung'; e.include = true; }
+        });
     }
 
     function ym(p) {
@@ -288,16 +361,33 @@
         return m ? (+m[1]) * 12 + (+m[2] - 1) : null;
     }
 
-    function factorFor(entry, rules) {
-        if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return +entry.factorOverride;
-        switch (entry.category) {
-            case '__ausbildung': return rules.educationFactor;
-            case '__familie': return rules.familyFactor;
-            case '__dienst': return rules.serviceFactor;
+    /** Welche Regelgruppe einer Vorlage für einen Eintrag gilt. */
+    function ruleKeyFor(entry, tpl) {
+        if (entry.category === tpl.target) return 'same'; // Zielberuf kann auch z. B. «Assistenz-Einsatz» sein
+        if (CATEGORY_RULE[entry.category]) return CATEGORY_RULE[entry.category];
+        if ((tpl.related || []).includes(entry.category)) return 'related';
+        return 'other';
+    }
+
+    /** Anrechnung eines Monats für diesen Eintrag in Prozent (0–100). */
+    function weightFor(entry, tpl) {
+        if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return Math.max(0, Math.min(100, +entry.factorOverride));
+        const r = tpl.rules[ruleKeyFor(entry, tpl)] || { mode: 'flat', factor: 0 };
+        const pensum = Math.max(0, Math.min(100, +entry.pensum || 0));
+        switch (r.mode) {
+            case 'pensum': return r.factor * pensum / 100;
+            case 'threshold': return pensum > 50 ? r.factor : +r.low;
+            default: return +r.factor;
         }
-        if (entry.category === rules.target) return rules.sameFactor;
-        if ((rules.related || []).includes(entry.category)) return rules.relatedFactor;
-        return rules.otherFactor;
+    }
+
+    /** Text zur Regel, z. B. «bis 50 %: 50 %, über 50 %: 100 %». */
+    function describeRule(r) {
+        const f = x => (Math.round(x * 10) / 10).toString().replace('.', ',');
+        if (!r) return '–';
+        if (r.mode === 'pensum') return `${f(r.factor)} % vom Pensum`;
+        if (r.mode === 'threshold') return `Pensum bis 50 %: ${f(r.low)} %, über 50 %: ${f(r.factor)} %`;
+        return `${f(r.factor)} %`;
     }
 
     function roundYears(y, mode) {
@@ -309,44 +399,49 @@
         }
     }
 
-    const NOT_WORK = new Set(['__ausbildung', '__familie']);
+    const NOT_WORK = new Set(['__ausbildung', '__zweitausbildung', '__familie']);
+
+    /** Letzter Monat, der gezählt wird: heute oder Dezember des laufenden Jahres (Stichtag 31.12.). */
+    function cutoffIndex(tpl, today) {
+        return tpl.cutoff === 'yearEnd' ? today.getFullYear() * 12 + 11 : today.getFullYear() * 12 + today.getMonth();
+    }
 
     /**
      * Berechnet die anrechenbaren Jahre nach den Regeln einer Vorlage.
-     * Überschneidende Zeiträume werden nie doppelt gezählt: Pro Monat zählt die Tätigkeit mit dem
-     * höchsten Faktor (im Pensum-Modus werden die Pensen summiert, max. 100 %).
+     * Überschneidende Zeiträume werden nie doppelt gezählt: Pro Monat zählt die höchste Anrechnung
+     * (combine 'max') oder die Summe aller Anrechnungen bis höchstens 100 % (combine 'sum').
      * Reihenfolge: Mindestalter → Obergrenze Familienarbeit → Maximum → Rundung.
      * @param {Array} entries
-     * @param {object} rules   Vorlage (target, Faktoren, Grenzen, Rundung)
+     * @param {object} tpl     Vorlage (target, rules, Grenzen, Rundung, Stichtag)
      * @param {Date}  [today]
      * @param {object} [opts]  { birth: 'YYYY-MM' }
      */
-    function compute(entries, rules, today, opts) {
+    function compute(entries, tpl, today, opts) {
         today = today || new Date();
         opts = opts || {};
-        const target = rules.target;
-        const nowIdx = today.getFullYear() * 12 + today.getMonth();
+        const target = tpl.target;
+        const nowIdx = cutoffIndex(tpl, today);
         const birthIdx = ymToIndex(opts.birth);
-        const minIdx = birthIdx !== null && rules.minAge ? birthIdx + Math.round(rules.minAge * 12) : null;
-        const familyCap = rules.familyMaxYears ? Math.round(rules.familyMaxYears * 12) : Infinity;
+        const minIdx = birthIdx !== null && tpl.minAge ? birthIdx + Math.round(tpl.minAge * 12) : null;
+        const familyCap = tpl.familyMaxYears ? Math.round(tpl.familyMaxYears * 12) : Infinity;
         const months = new Map(); // idx -> [{i, w, cat}]
-        const perEntry = entries.map(() => ({ months: 0, credited: 0, factor: 0, valid: false }));
+        const perEntry = entries.map(() => ({ months: 0, credited: 0, factor: 0, valid: false, ruleKey: '' }));
 
         entries.forEach((e, i) => {
             const s = ymToIndex(e.start);
             let en = e.ongoing ? nowIdx : ymToIndex(e.end);
-            const f = factorFor(e, rules);
-            perEntry[i].factor = f;
+            const f = weightFor(e, tpl);
+            perEntry[i].factor = Math.round(f * 10) / 10;
+            perEntry[i].ruleKey = ruleKeyFor(e, tpl);
             if (s === null || en === null) return;
             en = Math.min(en, nowIdx);
             if (en < s) return;
             perEntry[i].valid = true;
             perEntry[i].months = en - s + 1;
             if (!e.include) return;
-            const p = rules.pensumMode ? Math.max(0, Math.min(100, +e.pensum || 0)) / 100 : 1;
             for (let k = s; k <= en; k++) {
                 if (!months.has(k)) months.set(k, []);
-                months.get(k).push({ i, w: (f / 100) * p, cat: e.category });
+                months.get(k).push({ i, w: f / 100, cat: e.category });
             }
         });
 
@@ -368,7 +463,7 @@
 
             list.sort((a, b) => b.w - a.w);
             let usedFamily = false;
-            if (rules.pensumMode) {
+            if (tpl.combine === 'sum') {
                 let left = 1;
                 for (const x of list) {
                     const take = Math.min(left, x.w);
@@ -390,9 +485,9 @@
         const exactYears = credited / 12;
         let creditedYears = exactYears;
         let capped = false;
-        if (rules.maxYears && creditedYears > rules.maxYears) { creditedYears = +rules.maxYears; capped = true; }
+        if (tpl.maxYears && creditedYears > tpl.maxYears) { creditedYears = +tpl.maxYears; capped = true; }
         const beforeRounding = creditedYears;
-        creditedYears = roundYears(creditedYears, rules.rounding);
+        creditedYears = roundYears(creditedYears, tpl.rounding);
 
         return {
             totalYears: totalMonths / 12,
@@ -405,10 +500,31 @@
             rounded: creditedYears !== beforeRounding,
             beforeMinAgeYears: beforeMinAge / 12,
             minAgeMonth: minIdx,
+            cutoffMonth: nowIdx,
             familyCapped,
             perEntry,
             perCategory
         };
+    }
+
+    /**
+     * Lohneinreihung aus den anrechenbaren Jahren: Start in der tiefsten Lohnklasse der Funktion,
+     * pro Erfahrungsjahr eine Lohnstufe (max. 10), Aufstieg in die nächste Klasse nach den Jahren in
+     * classUpYears (bis zur höchsten Klasse der Funktion), danach Korrektur (z. B. −1 ohne Ausbildung).
+     * @returns {null | {years, cls, stage, baseCls, ups, adjustment, salary}}
+     */
+    function placement(years, tpl, adjustment, salaryTable) {
+        if (!tpl.classMin) return null;
+        const y = Math.max(0, Math.floor(years + 1e-9));
+        const max = tpl.classMax || tpl.classMin;
+        const ups = (tpl.classUpYears || []).filter(n => y >= n).length;
+        let cls = Math.min(max, tpl.classMin + ups);
+        const adj = adjustment || { delta: 0, cap: null };
+        cls += adj.delta || 0;
+        if (adj.cap && adj.delta > 0) cls = Math.min(cls, adj.cap);
+        const stage = Math.min(10, y + 1);
+        const row = salaryTable && salaryTable.classes ? salaryTable.classes[cls] : null;
+        return { years: y, cls, stage, baseCls: tpl.classMin, ups, adjustment: adj, salary: row ? row[stage - 1] : null };
     }
 
     const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;
@@ -424,7 +540,10 @@
 
     DEFAULT_SETTINGS.templates = DEFAULT_SETTINGS.categories.map(c => Object.assign(makeTemplate(c.id, c.name), { id: 't_' + c.id }));
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, factorFor, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, ROUNDING };
+    DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
+    DEFAULT_SETTINGS.salaryTable = null;
+
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -19,8 +19,10 @@ Erfasse jede berufliche Tätigkeit und jede Ausbildung, die einen Zeitraum hat, 
 - Bei «heute», «aktuell», «seit …», «bis dato» o. ä. ist ongoing = true und end_year/end_month sind null.
 - Einträge ohne erkennbaren Zeitraum lässt du weg.
 - category: Wähle den Beruf aus der Liste unten anhand der tatsächlichen Tätigkeit, nicht anhand des Arbeitgebers (eine Sachbearbeiterin an einer Schule ist kaufmännisch, keine Lehrperson). Passt kein Beruf, nimm "__sonstige".
-- Schule, Lehre, Studium, Weiterbildungen, Kurse und Praktika im Rahmen einer Ausbildung erhalten category "__ausbildung".
-- Familienarbeit (Betreuung der eigenen Kinder, Familienpause, Elternzeit) erhält category "__familie", Militär- und Zivildienst "__dienst". Nimm solche Zeiten nur auf, wenn sie im Lebenslauf ausdrücklich mit Zeitraum stehen.
+- Schulen, Weiterbildungen, Kurse und Praktika im Rahmen einer Ausbildung erhalten category "__ausbildung".
+- Die erste Lehre bzw. das erste Studium (sowie Schulen wie Matura) erhalten "__ausbildung". Eine weitere, spätere Berufsausbildung nach abgeschlossener erster (z. B. Zweitlehre, Zweitstudium, HF/FH nach einer Lehre in anderem Beruf) erhält "__zweitausbildung".
+- Praktika ausserhalb einer Ausbildung erhalten "__praktikum" (Pensum angeben). Assistenz-Einsätze im pädagogischen, betreuerischen oder pflegerischen Bereich (z. B. Klassenassistenz, Pädagogische Assistenz) erhalten "__assistenz".
+- Familienarbeit (Betreuung der eigenen Kinder, Familienpause, Elternzeit) erhält category "__familie", Militär- und Zivildienst "__dienst". Nimm Familienarbeit auf, wenn sie ausdrücklich mit Zeitraum im Lebenslauf steht. Stehen nur Kinder mit Geburtsjahren im Lebenslauf, erfasse einen Eintrag «Familienzeit (Kinder 0–18 Jahre)» von der Geburt des ersten bis zum 18. Geburtstag des jüngsten Kindes (höchstens bis heute, ongoing wenn noch nicht erreicht) mit note «aus den Geburtsjahren der Kinder abgeleitet».
 - pensum: Beschäftigungsgrad in Prozent, falls angegeben (bei Spannen wie «60–80 %» den Mittelwert), sonst 100.
 - title: die Funktion (z. B. «Primarlehrerin 4. Klasse»), employer: Arbeitgeber bzw. Schule mit Ort, falls angegeben.
 - note: nur ausfüllen, wenn Beruf, Daten oder Pensum unsicher sind (ein kurzer Satz), sonst leerer String.
@@ -68,6 +70,9 @@ function buildSchema(categoryIds) {
 function categoryList(categories) {
     return categories.map(c => `- "${c.id}": ${c.name}` + (c.keywords.length ? ` (z. B. ${c.keywords.slice(0, 12).join(', ')})` : '')).join('\n')
         + '\n- "__sonstige": anderer Beruf, passt zu keinem der obigen'
+        + '\n- "__praktikum": Praktikum (nicht Teil einer Ausbildung)'
+        + '\n- "__assistenz": Assistenz-Einsatz (pädagogisch, betreuerisch, pflegerisch)'
+        + '\n- "__zweitausbildung": Zweitausbildung nach abgeschlossener Erstausbildung'
         + '\n- "__familie": Familienarbeit (Betreuung der eigenen Kinder)'
         + '\n- "__dienst": Militär- oder Zivildienst'
         + '\n- "__ausbildung": Schule, Lehre, Studium, Weiterbildung (keine Berufserfahrung)';
@@ -98,7 +103,7 @@ function toEntry(e, categoryIds) {
     const pensum = Number.isInteger(e.pensum) && e.pensum > 0 && e.pensum <= 100 ? e.pensum : 100;
     return {
         id: 'e' + Math.random().toString(36).slice(2, 9),
-        include: category !== '__ausbildung',
+        include: category !== '__ausbildung',   // Zweitausbildung zählt je nach Vorlage
         start: `${sy}-${pad(sm ?? 1)}`,
         end,
         ongoing: !!e.ongoing,
@@ -143,7 +148,7 @@ export async function analyze({ apiKey, serverUrl, password, model, categories, 
         ? new Anthropic({ apiKey: 'server', baseURL: serverUrl, dangerouslyAllowBrowser: true, defaultHeaders: { 'x-app-password': password || '' } })
         : new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
     model = model || DEFAULT_MODEL;
-    const categoryIds = categories.map(c => c.id).concat('__sonstige', '__familie', '__dienst', '__ausbildung');
+    const categoryIds = categories.map(c => c.id).concat('__sonstige', '__praktikum', '__assistenz', '__familie', '__dienst', '__ausbildung', '__zweitausbildung');
     const today = new Date();
 
     const content = [];

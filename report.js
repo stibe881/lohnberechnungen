@@ -49,11 +49,12 @@
                 <div><span>andere Berufe</span><b>${fmt(r.otherYears)} J.</b></div>
                 <div class="r-main"><span>Anrechenbare Jahre</span><b>${fmt(r.creditedYears)} J.</b></div>
             </div>
+            ${v.placementText ? `<p class="r-placement"><b>Vorschlag Lohneinreihung:</b> ${esc(v.placementText)}<br><span>${esc(v.placementWhy)}</span></p>` : ''}
             <p class="r-formula"><b>Berechnung:</b> ${v.formulaText}</p>
             <p class="r-rules"><b>Regeln:</b> ${esc(v.rulesText)}</p>
             ${v.timeline ? `<div class="r-timeline">${v.timeline}</div>` : ''}
             <table class="r-table">
-                <thead><tr><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th><th class="num">Pensum</th><th class="num">Dauer (J.)</th><th class="num">Faktor</th><th class="num">Angerechnet (J.)</th></tr></thead>
+                <thead><tr><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th><th class="num">Pensum</th><th class="num">Dauer (J.)</th><th class="num">Anrechnung</th><th class="num">Angerechnet (J.)</th></tr></thead>
                 <tbody>${rows || '<tr><td colspan="8">Keine Einträge</td></tr>'}</tbody>
             </table>
             ${hasOverride ? '<p class="r-note">* Faktor manuell angepasst.</p>' : ''}

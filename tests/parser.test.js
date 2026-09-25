@@ -60,7 +60,7 @@ r = P.compute(ov, rules('lehrperson'), today);
 assert.strictEqual(r.totalYears, 5);
 assert.strictEqual(r.creditedYears, 5);
 // Pensum-Modus: 50% Lehrer (1.0) + 50% Kaufm (0.5) = 0.75 pro Monat
-r = P.compute(ov, rules('lehrperson', { pensumMode: true }), today);
+r = P.compute(ov, P.upgradeTemplate({ target: 'lehrperson', pensumMode: true }), today);
 assert.ok(Math.abs(r.creditedYears - 3.75) < 1e-9);
 
 // Verwandte Berufe
@@ -101,11 +101,55 @@ assert.strictEqual(e2[0].category, '__familie');
 assert.strictEqual(e2[1].category, '__dienst');
 assert.strictEqual(P.extractBirth('Geburtsdatum: 12.03.1985'), '1985-03');
 assert.strictEqual(P.extractBirth('Jahrgang 1990'), '1990-01');
+// --- Regeln nach Reglement (Pensum-abhängig) ---
+const sobe = rules('sozial', { combine: 'sum', cutoff: 'today', related: ['gesundheit'] });
+sobe.rules.same = { mode: 'threshold', factor: 100, low: 50 };
+sobe.rules.related = { mode: 'threshold', factor: 100, low: 50 };
+sobe.rules.other = { mode: 'pensum', factor: 25, low: 0 };
+sobe.rules.internship = { mode: 'threshold', factor: 50, low: 25 };
+sobe.rules.assistance = { mode: 'pensum', factor: 100, low: 0 };
+sobe.rules.family = { mode: 'flat', factor: 100 / 3, low: 0 };
+sobe.rules.secondEducation = { mode: 'flat', factor: 50, low: 0 };
+const y = (entries) => Math.round(P.compute(entries, sobe, today).exactYears * 1e9) / 1e9;
+const one = (cat, pensum) => [{ include: true, start: '2020-01', end: '2020-12', category: cat, pensum }];
+assert.strictEqual(y(one('sozial', 40)), 0.5);      // gleiche Funktion bis 50 %: 50 %
+assert.strictEqual(y(one('sozial', 60)), 1);        // über 50 %: 100 %
+assert.strictEqual(y(one('gesundheit', 80)), 1);    // verwandt: wie gleiche Funktion
+assert.strictEqual(y(one('kaufm', 80)), 0.2);       // ohne Verbindung: 25 % vom Pensum
+assert.strictEqual(y(one('__praktikum', 40)), 0.25);
+assert.strictEqual(y(one('__praktikum', 100)), 0.5);
+assert.strictEqual(y(one('__assistenz', 60)), 0.6); // 100 % vom geleisteten Pensum
+assert.strictEqual(y(one('__zweitausbildung', 100)), 0.5);
+// Familienzeit 1/3 zusätzlich zu 50 % Arbeit, zusammen max. 100 %: 0.5 + 0.333 = 0.833
+const fam2 = one('sozial', 50).concat(one('__familie', 100));
+assert.ok(Math.abs(y(fam2) - (0.5 + 1 / 3)) < 1e-9);
+const fam3 = one('sozial', 80).concat(one('__familie', 100)); // 1.0 + 0.333 -> gedeckelt auf 1.0
+assert.ok(Math.abs(y(fam3) - 1) < 1e-9);
+// Stichtag 31.12.: laufende Stelle zählt bis Dezember
+const cut = P.compute([{ include: true, start: '2026-01', end: '', ongoing: true, category: 'sozial', pensum: 100 }], Object.assign({}, sobe, { cutoff: 'yearEnd' }), today);
+assert.strictEqual(cut.exactYears, 1);
+// Lohneinreihung: 11–13, Aufstieg nach 12 und 24 Jahren
+const pl = t => P.placement(t, Object.assign({}, sobe, { classMin: 11, classMax: 13 }), null, { classes: { 11: [1,2,3,4,5,6,7,8,9,10], 12: [11,12,13,14,15,16,17,18,19,20], 13: [21,22,23,24,25,26,27,28,29,30] } });
+assert.deepStrictEqual([pl(0).cls, pl(0).stage, pl(0).salary], [11, 1, 1]);
+assert.deepStrictEqual([pl(5.9).cls, pl(5.9).stage], [11, 6]);
+assert.deepStrictEqual([pl(12).cls, pl(12).stage, pl(12).salary], [12, 10, 20]);
+assert.deepStrictEqual([pl(30).cls, pl(30).stage], [13, 10]);
+assert.strictEqual(P.placement(3, Object.assign({}, sobe, { classMin: 11, classMax: 13 }), { delta: -1 }).cls, 10);
+assert.strictEqual(P.placement(30, Object.assign({}, sobe, { classMin: 16, classMax: 18 }), { delta: 1, cap: 18 }).cls, 18);
+// Zweitausbildung erkennen
+const e3 = P.extractEntries('Ausbildung\n2005 – 2008 Lehre als Kauffrau EFZ\n2015 – 2018 Studium Sozialpädagogik HF', S, today);
+assert.strictEqual(e3[0].category, '__ausbildung');
+assert.strictEqual(e3[1].category, '__zweitausbildung');
+// Praktikum erkennen
+assert.strictEqual(P.extractEntries('Berufserfahrung\n01/2019 – 06/2019 Praktikum Kita Sonnenschein', S, today)[0].category, '__praktikum');
+
+assert.strictEqual(P.extractEntries('Berufserfahrung\n02/2015 – 06/2015 Praktikum Heilpädagogische Schule', S, today)[0].category, '__praktikum');
+
 // Alte Einstellungen (globale Faktoren) werden in Vorlagen übernommen
 const old = { sameFactor: 100, relatedFactor: 80, otherFactor: 40, educationFactor: 0, categories: [{ id: 'a', name: 'A', keywords: [], related: ['b'] }, { id: 'b', name: 'B', keywords: [], related: [] }] };
 const norm = P.normalizeSettings(old);
 assert.strictEqual(norm.templates.length, 2);
 assert.deepStrictEqual(norm.templates[1].related, ['a']);
-assert.strictEqual(norm.templates[0].otherFactor, 40);
+assert.strictEqual(norm.templates[0].rules.other.factor, 40);
 
 console.log('Alle Tests bestanden.');

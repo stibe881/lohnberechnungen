@@ -65,6 +65,29 @@
     const uid = () => 'c' + Math.random().toString(36).slice(2, 9);
     const tplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
     const computeFor = c => P.compute(c.entries, tplOf(c), undefined, { birth: c.birth });
+    const adjustmentOf = c => (settings.classAdjustments || []).find(a => a.id === c.adjustmentId) || null;
+    const placementFor = (c, r) => P.placement(r.creditedYears, tplOf(c), adjustmentOf(c), settings.salaryTable);
+    const chf = v => 'CHF ' + (Math.round(v * 20) / 20).toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    /** Lohneinreihung als Text, z. B. «Lohnklasse 12, Stufe 6 · Jahreslohn CHF 95'000.00 (100 %)». */
+    function placementText(c, pl) {
+        if (!pl) return '';
+        const parts = [`Lohnklasse ${pl.cls}, Stufe ${pl.stage}`];
+        if (pl.salary) {
+            const p = Math.max(0, Math.min(100, +c.newPensum || 100));
+            parts.push(`Jahreslohn ${chf(pl.salary)} bei 100 %`);
+            if (p !== 100) parts.push(`${chf(pl.salary * p / 100)} bei ${p} %`);
+            parts.push(`Monatslohn (13×) ${chf(pl.salary * p / 100 / 13)}`);
+        }
+        return parts.join(' · ');
+    }
+    function placementWhy(t, pl) {
+        if (!pl) return '';
+        let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
+        if (pl.ups) s += `, +${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} nach ${(t.classUpYears || []).slice(0, pl.ups).join(' und ')} Jahren`;
+        if (pl.adjustment && pl.adjustment.delta) s += `, Korrektur: ${pl.adjustment.label}`;
+        return s + (settings.salaryTable ? '' : ' (keine Gehaltstabelle hinterlegt)');
+    }
 
     function setStatus(msg, isError) {
         const el = $('#status');
@@ -186,6 +209,8 @@
             text,
             pdfBase64: pdfBase64 || null,
             templateId: defaultTemplateId,
+            adjustmentId: '',
+            newPensum: 100,
             entries: [],
             loading: true
         };
@@ -272,13 +297,19 @@
 
     // --- Darstellung der Regeln & Berechnung (auch für den Bericht) ---
     function rulesText(t) {
-        const parts = [`gleicher Beruf (${catName(t.target)}) ${t.sameFactor} %`];
-        if (t.related.length) parts.push(`verwandte Berufe (${t.related.map(catName).join(', ')}) ${t.relatedFactor} %`);
-        parts.push(`andere Berufe ${t.otherFactor} %`);
-        parts.push(`Familienarbeit ${t.familyFactor} %` + (t.familyMaxYears ? ` (max. ${fmt(t.familyMaxYears)} J.)` : ''));
-        parts.push(`Militär-/Zivildienst ${t.serviceFactor} %`);
-        parts.push(`Ausbildung ${t.educationFactor} %`);
-        if (t.pensumMode) parts.push('Teilzeit anteilig');
+        const R = t.rules;
+        const d = k => P.describeRule(R[k]);
+        const parts = [`Zielberuf (${catName(t.target)}): ${d('same')}`];
+        if (t.related.length) parts.push(`verwandte Berufe (${t.related.map(catName).join(', ')}): ${d('related')}`);
+        parts.push(`andere Berufe: ${d('other')}`);
+        parts.push(`Praktikum: ${d('internship')}`);
+        parts.push(`Assistenz: ${d('assistance')}`);
+        parts.push(`Familienarbeit: ${d('family')}` + (t.familyMaxYears ? ` (max. ${fmt(t.familyMaxYears)} J.)` : ''));
+        parts.push(`Militär-/Zivildienst: ${d('service')}`);
+        parts.push(`Erstausbildung: ${d('education')}`);
+        parts.push(`Zweitausbildung: ${d('secondEducation')}`);
+        parts.push(t.combine === 'sum' ? 'gleichzeitige Tätigkeiten werden addiert, max. 100 % pro Monat' : 'bei gleichzeitigen Tätigkeiten zählt die höchste Anrechnung');
+        if (t.cutoff === 'yearEnd') parts.push('Stichtag 31.12. des laufenden Jahres');
         if (t.minAge) parts.push(`angerechnet ab Alter ${t.minAge}`);
         if (t.maxYears) parts.push(`höchstens ${fmt(t.maxYears)} J.`);
         if (t.rounding && t.rounding !== 'none') parts.push((P.ROUNDING.find(r => r.id === t.rounding) || {}).name);
@@ -307,7 +338,7 @@
     }
 
     function timelineHtml(c, r) {
-        return window.CVTimeline ? CVTimeline.render({ entries: c.entries, perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth }) : '';
+        return window.CVTimeline ? CVTimeline.render({ entries: c.entries, perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth, endMonth: r.cutoffMonth }) : '';
     }
 
     function buildView(c) {
@@ -321,6 +352,8 @@
             sourceText: c.source === 'ki' ? `KI-gestützt mit ${modelName} (Anthropic), durch eine Person geprüft` : 'regelbasiert (ohne KI), durch eine Person geprüft',
             rulesText: rulesText(t),
             formulaText: formulaHtml(c, r, t),
+            placementText: placementText(c, placementFor(c, r)),
+            placementWhy: placementWhy(t, placementFor(c, r)),
             timeline: timelineHtml(c, r)
         };
     }
@@ -352,7 +385,7 @@
             if (c.loading) {
                 return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
                     <td><strong>${esc(c.name)}</strong></td><td>${esc(tplOf(c).name)}</td>
-                    <td colspan="4" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td><td></td></tr>`;
+                    <td colspan="5" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td><td></td></tr>`;
             }
             const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
@@ -362,6 +395,7 @@
                 <td class="num">${fmt(r.targetYears)}</td>
                 <td class="num">${fmt(r.otherYears)}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong></td>
+                <td class="num">${(pl => pl ? `LK ${pl.cls} / St. ${pl.stage}` : '–')(placementFor(c, r))}</td>
                 <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Entfernen" aria-label="Entfernen">✕</button></td>
             </tr>`;
         }).join('');
@@ -397,7 +431,7 @@
                 <td class="num">${pe.valid ? fmtYM(pe.months / 12) : '<span class="badge">Datum?</span>'}${e.imprecise ? '<span class="badge" title="Nur Jahreszahl angegeben – bitte Monate prüfen">ungenau</span>' : ''}</td>
                 <td class="c-small">
                     <div class="suffix"><input type="number" min="0" max="100" data-f="factorOverride" value="${auto ? '' : esc(e.factorOverride)}" placeholder="${pe.factor}" aria-label="Faktor"><em>%</em></div>
-                    ${auto ? '<div class="factor-auto">automatisch</div>' : ''}
+                    ${auto ? `<div class="factor-auto" title="${esc(P.describeRule(t.rules[pe.ruleKey]))}">${esc((P.RULE_KEYS.find(k => k.id === pe.ruleKey) || {}).name || 'automatisch')}</div>` : '<div class="factor-auto">manuell</div>'}
                 </td>
                 <td class="num"><strong>${fmt(pe.credited / 12)}</strong></td>
                 <td><button class="btn-icon" type="button" data-del="${e.id}" title="Zeile löschen" aria-label="Zeile löschen">✕</button></td>
@@ -411,6 +445,8 @@
                 <div class="head-fields">
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
                     <label class="field"><span>Stelle / Vorlage</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
+                    ${t.classMin ? `<label class="field"><span>Pensum neue Stelle</span><div class="suffix"><input type="number" min="1" max="100" data-cf="newPensum" value="${esc(c.newPensum)}"><em>%</em></div></label>
+                    <label class="field"><span>Korrektur Lohnklasse</span><select data-cf="adjustmentId"><option value="">keine</option>${(settings.classAdjustments || []).map(a => `<option value="${esc(a.id)}"${a.id === c.adjustmentId ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}
                 </div>
             </div>
             <p class="source">${c.source === 'ki' ? '<span class="pill pill-ai">✨ ausgewertet mit Claude</span>' : '<span class="pill">ausgewertet mit Regeln</span>'}
@@ -423,12 +459,13 @@
                 <div class="stat"><div class="label">andere Berufe</div><div class="value">${fmt(r.otherYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.otherYears)}</div></div>
                 <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
+            ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div></div>` : '')(placementFor(c, r))}
             <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))}</div></div>
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
             ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
                 <thead><tr>
                     <th title="Anrechnen">✓</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
-                    <th>Pensum</th><th class="num">Dauer</th><th>Faktor</th><th class="num">Angerechnet</th><th></th>
+                    <th>Pensum</th><th class="num">Dauer</th><th title="Anrechnung pro Monat nach den Regeln der Vorlage; überschreibbar">Anrechnung</th><th class="num">Angerechnet</th><th></th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
             </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>'}
@@ -523,7 +560,7 @@
         if (!c || c.loading) return;
         const t = e.target;
         if (t.dataset.cf) {
-            c[t.dataset.cf] = t.value;
+            c[t.dataset.cf] = t.dataset.cf === 'newPensum' ? Math.max(1, Math.min(100, +t.value || 100)) : t.value;
             if (t.dataset.cf === 'name') c.autoName = false;
             if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
@@ -542,7 +579,7 @@
             const now = new Date();
             entry.end = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
         }
-        if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).educationFactor > 0;
+        if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).rules.education.factor > 0;
         render();
     });
     detail.addEventListener('click', e => {
@@ -586,11 +623,13 @@
     $('#exportCsv').addEventListener('click', () => {
         const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
         const n = y => (Math.round(y * 100) / 100).toFixed(2).replace('.', ',');
-        const lines = [['Person', 'Geburtsdatum', 'Stelle / Vorlage', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre (ungerundet)', 'Anrechenbare Jahre', 'Auswertung'].map(q).join(';')];
-        const details = [['Person', 'Funktion', 'Details', 'Beruf', 'Von', 'Bis', 'Pensum %', 'Angerechnet (ja/nein)', 'Faktor %', 'Dauer Jahre', 'Angerechnete Jahre'].map(q).join(';')];
+        const lines = [['Person', 'Geburtsdatum', 'Stelle / Vorlage', 'Total Jahre', 'Jahre im Zielberuf', 'Jahre andere Berufe', 'Anrechenbare Jahre (ungerundet)', 'Anrechenbare Jahre', 'Lohnklasse', 'Lohnstufe', 'Jahreslohn 100 %', 'Pensum neue Stelle %', 'Auswertung'].map(q).join(';')];
+        const details = [['Person', 'Funktion', 'Details', 'Beruf', 'Von', 'Bis', 'Pensum %', 'Angerechnet (ja/nein)', 'Anrechnung %', 'Dauer Jahre', 'Angerechnete Jahre'].map(q).join(';')];
         for (const c of candidates.filter(x => !x.loading)) {
             const r = computeFor(c);
-            lines.push([q(c.name), q(c.birth), q(tplOf(c).name), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.exactYears), n(r.creditedYears), q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
+            const pl = placementFor(c, r);
+            lines.push([q(c.name), q(c.birth), q(tplOf(c).name), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.exactYears), n(r.creditedYears),
+                pl ? pl.cls : '', pl ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', c.newPensum, q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
             c.entries.forEach((e, i) => {
                 const pe = r.perEntry[i];
                 details.push([q(c.name), q(e.title), q(e.details), q(catName(e.category)), q(e.start), q(e.ongoing ? 'heute' : e.end), e.pensum,
@@ -646,30 +685,49 @@
         opts = opts || {};
         return `<label class="field"><span>${label}</span><div class="suffix"><input type="number" data-t="${key}" min="0" ${opts.max !== undefined ? `max="${opts.max}"` : ''} step="${opts.step || 1}" value="${val ?? ''}" placeholder="${opts.placeholder || ''}"><em>${opts.unit || '%'}</em></div></label>`;
     };
+    const r1 = v => Math.round(v * 100) / 100;
+
+    function rulesGrid(t) {
+        return `<div class="rules-grid">
+            <div class="rg-head">Tätigkeit</div><div class="rg-head">Anrechnungsart</div><div class="rg-head">Anrechnung</div><div class="rg-head">bis 50 % Pensum</div>
+            ${P.RULE_KEYS.map(k => {
+                const r = t.rules[k.id];
+                return `<div class="rg-name">${esc(k.name)}</div>
+                <select data-r="${k.id}" data-rf="mode" aria-label="${esc(k.name)}: Anrechnungsart">${P.MODES.map(m => `<option value="${m.id}"${m.id === r.mode ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>
+                <div class="suffix"><input type="number" min="0" max="100" step="0.01" data-r="${k.id}" data-rf="factor" value="${r1(r.factor)}" aria-label="${esc(k.name)}: Anrechnung"><em>%</em></div>
+                <div class="suffix"><input type="number" min="0" max="100" step="0.01" data-r="${k.id}" data-rf="low" value="${r1(r.low)}" ${r.mode === 'threshold' ? '' : 'disabled'} aria-label="${esc(k.name)}: bis 50 % Pensum"><em>%</em></div>`;
+            }).join('')}
+        </div>`;
+    }
 
     function renderTemplatesForm(openId) {
         $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${t.id === openId ? 'open' : ''}>
-            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.find(c => c.id === t.target) || { name: '–' }).name)}</span></summary>
+            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${t.classMin ? ` · Lohnklasse ${t.classMin}${t.classMax && t.classMax !== t.classMin ? '–' + t.classMax : ''}` : ''}</span></summary>
             <div class="tpl-body">
                 <div class="grid-2">
                     <label class="field"><span>Name der Vorlage (z. B. «Primarlehrperson»)</span><input type="text" data-t="name" value="${esc(t.name)}"></label>
-                    <label class="field"><span>Zielberuf (zählt mit «gleicher Beruf»)</span><select data-t="target">${draft.categories.map(c => `<option value="${esc(c.id)}"${c.id === t.target ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+                    <label class="field"><span>Zielberuf (zählt als «gleicher Beruf»)</span><select data-t="target">${draft.categories.concat(P.SPECIAL_CATEGORIES.filter(x => P.TARGETABLE_SPECIALS.includes(x.id))).map(c => `<option value="${esc(c.id)}"${c.id === t.target ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
                 </div>
+                <div class="cat-related"><span>Verwandte Berufe:</span>${draft.categories.filter(o => o.id !== t.target).map(o =>
+                    `<label class="check"><input type="checkbox" data-rel="${esc(o.id)}" ${t.related.includes(o.id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('')}</div>
+                ${rulesGrid(t)}
                 <div class="grid-4">
-                    ${numField('Gleicher Beruf', 'sameFactor', t.sameFactor, { max: 100 })}
-                    ${numField('Verwandter Beruf', 'relatedFactor', t.relatedFactor, { max: 100 })}
-                    ${numField('Anderer Beruf', 'otherFactor', t.otherFactor, { max: 100 })}
-                    ${numField('Ausbildung', 'educationFactor', t.educationFactor, { max: 100 })}
-                    ${numField('Familienarbeit', 'familyFactor', t.familyFactor, { max: 100 })}
+                    <label class="field"><span>Gleichzeitige Tätigkeiten</span><select data-t="combine">
+                        <option value="max"${t.combine === 'max' ? ' selected' : ''}>höchste Anrechnung zählt</option>
+                        <option value="sum"${t.combine === 'sum' ? ' selected' : ''}>addieren, max. 100 % pro Monat</option></select></label>
+                    <label class="field"><span>Stichtag</span><select data-t="cutoff">
+                        <option value="today"${t.cutoff !== 'yearEnd' ? ' selected' : ''}>heute</option>
+                        <option value="yearEnd"${t.cutoff === 'yearEnd' ? ' selected' : ''}>31.12. des laufenden Jahres</option></select></label>
                     ${numField('Familienarbeit max.', 'familyMaxYears', t.familyMaxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
-                    ${numField('Militär-/Zivildienst', 'serviceFactor', t.serviceFactor, { max: 100 })}
                     ${numField('Anrechnung ab Alter', 'minAge', t.minAge, { unit: 'J.', placeholder: 'kein' })}
                     ${numField('Höchstens anrechenbar', 'maxYears', t.maxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
                     <label class="field"><span>Rundung</span><select data-t="rounding">${P.ROUNDING.map(r => `<option value="${r.id}"${r.id === t.rounding ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
                 </div>
-                <label class="check"><input type="checkbox" data-t="pensumMode" ${t.pensumMode ? 'checked' : ''}> Teilzeit anteilig anrechnen (50 % Pensum = halbe Zeit)</label>
-                <div class="cat-related"><span>Verwandte Berufe (zählen mit «Verwandter Beruf»):</span>${draft.categories.filter(o => o.id !== t.target).map(o =>
-                    `<label class="check"><input type="checkbox" data-rel="${esc(o.id)}" ${t.related.includes(o.id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('')}</div>
+                <div class="grid-4">
+                    ${numField('Lohnklasse von', 'classMin', t.classMin, { unit: 'LK', placeholder: 'keine' })}
+                    ${numField('Lohnklasse bis', 'classMax', t.classMax, { unit: 'LK', placeholder: 'keine' })}
+                    <label class="field"><span>Klassenaufstieg nach Jahren</span><input type="text" data-t="classUpYears" value="${esc((t.classUpYears || []).join(', '))}" placeholder="z. B. 12, 24"></label>
+                </div>
                 <div class="row-gap">
                     <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">Duplizieren</button>
                     <button class="btn btn-ghost btn-sm" type="button" data-deltpl="${esc(t.id)}">Löschen</button>
@@ -686,9 +744,19 @@
         </div>`).join('');
     }
 
+    function renderSalaryStatus() {
+        const st = draft.salaryTable;
+        const cls = st ? Object.keys(st.classes).map(Number).sort((a, b) => a - b) : [];
+        $('#salaryStatus').innerHTML = st
+            ? `<span class="ok">✓ ${esc(st.name || 'Gehaltstabelle')}</span>${st.validFrom ? ', gültig ab ' + esc(st.validFrom) : ''} · Lohnklassen ${cls[0]}–${cls[cls.length - 1]}`
+            : 'Keine Gehaltstabelle hinterlegt.';
+        $('#removeSalary').hidden = !st;
+    }
+
     function renderSettingsForm(openTplId) {
         renderTemplatesForm(openTplId);
         renderCatsForm();
+        renderSalaryStatus();
     }
 
     function readSettingsForm() {
@@ -700,21 +768,24 @@
         document.querySelectorAll('#tplList .tpl-item').forEach(item => {
             const t = draft.templates.find(x => x.id === item.dataset.tpl);
             const v = k => item.querySelector(`[data-t="${k}"]`).value;
-            const pct = (k, d) => v(k) === '' ? d : Math.max(0, Math.min(100, +v(k)));
             const optNum = k => v(k) === '' || +v(k) <= 0 ? null : +v(k);
             t.name = v('name').trim() || 'Unbenannte Vorlage';
             t.target = v('target');
-            t.sameFactor = pct('sameFactor', 100);
-            t.relatedFactor = pct('relatedFactor', 75);
-            t.otherFactor = pct('otherFactor', 50);
-            t.educationFactor = pct('educationFactor', 0);
-            t.familyFactor = pct('familyFactor', 50);
-            t.serviceFactor = pct('serviceFactor', 50);
+            P.RULE_KEYS.forEach(k => {
+                const f = rf => item.querySelector(`[data-r="${k.id}"][data-rf="${rf}"]`).value;
+                const pct = (x, d) => x === '' ? d : Math.max(0, Math.min(100, +x));
+                t.rules[k.id] = { mode: f('mode'), factor: pct(f('factor'), 0), low: pct(f('low'), 0) };
+            });
+            t.combine = v('combine');
+            t.cutoff = v('cutoff');
             t.familyMaxYears = optNum('familyMaxYears');
             t.minAge = optNum('minAge');
             t.maxYears = optNum('maxYears');
             t.rounding = v('rounding');
-            t.pensumMode = item.querySelector('[data-t="pensumMode"]').checked;
+            t.classMin = optNum('classMin');
+            t.classMax = optNum('classMax');
+            if (t.classMin && t.classMax && t.classMax < t.classMin) t.classMax = t.classMin;
+            t.classUpYears = v('classUpYears').split(/[,; ]+/).map(Number).filter(n => n > 0).sort((a, b) => a - b);
             t.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel).filter(r => r !== t.target);
         });
     }
@@ -729,6 +800,10 @@
     });
     $('#settingsDialog').addEventListener('change', e => {
         if (e.target.name === 'aiMode' || e.target.id === 'aiEnabled') { readAiForm(); renderAiForm(); }
+        if (e.target.dataset.rf === 'mode') {
+            const low = e.target.closest('.rules-grid').querySelector(`[data-r="${e.target.dataset.r}"][data-rf="low"]`);
+            low.disabled = e.target.value !== 'threshold';
+        }
         // Nur beim Zielberuf neu aufbauen (Liste «verwandt» ändert sich); sonst ginge die Eingabe im nächsten Feld verloren
         if (e.target.dataset.t === 'target') {
             readSettingsForm();
@@ -763,6 +838,12 @@
             draft.templates.splice(draft.templates.indexOf(src) + 1, 0, t);
             renderTemplatesForm(t.id);
         }
+    });
+    $('#removeSalary').addEventListener('click', () => {
+        if (!confirm('Gehaltstabelle entfernen?')) return;
+        readSettingsForm();
+        draft.salaryTable = null;
+        renderSalaryStatus();
     });
     $('#addCat').addEventListener('click', () => {
         readSettingsForm();
