@@ -375,7 +375,13 @@
     /** Umlaute und «ae/oe/ue» gleich behandeln («Sozialpaedagogin» = «Sozialpädagogin»). */
     const fold = s => s.replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue');
 
+    // Ein Treffer in der Funktionsbezeichnung schlägt immer einen Treffer beim Arbeitgeber; innerhalb
+    // der Zeile zählt der Teil vor dem ersten Komma («Koch, Altersheim Baar» ist Koch, nicht Betreuung).
+    const TITLE_BONUS = 1000;
+    const FUNCTION_PART = /^(.*?)(?:,|\s[–-]\s|\s\|\s|\s\(|\sbei\s|\sim\s|\sin der\s|\sat\s|$)/i;
+
     function classify(title, details, categories) {
+        const f = fold(' ' + ((FUNCTION_PART.exec((title || '').toLowerCase()) || [])[1] || '') + ' ');
         const t = fold(' ' + (title || '').toLowerCase() + ' ');
         const d = fold(' ' + (details || '').toLowerCase() + ' ');
         let best = null, bestScore = 0, titleHit = false;
@@ -389,11 +395,13 @@
                     const len = kw.replace(/\+/g, '').length;
                     if (!keywordHit(t + d, kw)) continue;
                     const inTitle = keywordHit(t, kw.split('+')[0]); // Hauptteil in der Funktionsbezeichnung
-                    score = Math.max(score, len * (inTitle ? 2 : 1));
+                    const inFunction = keywordHit(f, kw.split('+')[0]);
+                    score = Math.max(score, inFunction ? 2 * TITLE_BONUS + len * 2 : inTitle ? TITLE_BONUS + len * 2 : len);
                     if (inTitle) hitTitle = true;
                     continue;
                 }
-                if (t.includes(kw)) { score = Math.max(score, kw.length * 2); hitTitle = true; }
+                if (f.includes(kw)) { score = Math.max(score, 2 * TITLE_BONUS + kw.length * 2); hitTitle = true; }
+                else if (t.includes(kw)) { score = Math.max(score, TITLE_BONUS + kw.length * 2); hitTitle = true; }
                 else if (d.includes(kw)) score = Math.max(score, kw.length);
             }
             if (score > bestScore) { bestScore = score; best = cat.id; titleHit = hitTitle; }

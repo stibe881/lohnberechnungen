@@ -358,3 +358,10 @@ const cats2 = [{ id: 'fabe', name: 'FaBe', keywords: ['fabe', 'fachfrau betreuun
 assert.strictEqual(P.classify('Fachfrau Betreuung EFZ', 'Kita Sonnenschein', cats2).category, 'fabe');
 assert.strictEqual(P.classify('Fachfrau Betreuung EFZ', 'Wohnheim für Menschen mit Behinderung', cats2).category, 'fabe_b');
 console.log('Stichwörter a+b beim Einordnen bestanden.');
+
+// Funktion vor dem Arbeitgeber: «Koch, Altersheim» ist Koch
+const catsWork = [{ id: 'koch', name: 'Koch', keywords: ['koch'] }, { id: 'betreuung', name: 'Betreuung', keywords: ['altersheim', 'betreuung'] }];
+assert.strictEqual(P.classify('Koch, Altersheim Baar (Pensum 100%)', '', catsWork).category, 'koch');
+assert.strictEqual(P.classify('Koch', 'Altersheim Baar', catsWork).category, 'koch');
+assert.strictEqual(P.classify('Mitarbeiterin', 'Altersheim Baar', catsWork).category, 'betreuung');
+console.log('Funktion vor Arbeitgeber bestanden.');
