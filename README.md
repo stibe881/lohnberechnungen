@@ -31,6 +31,7 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Aus Dokumenten erstellen:** Besoldungsreglement und Gehaltstabelle einlesen – jede Funktion des Einreihungsplans wird eine Vorlage (mit Lohnklassen, Aufstieg, Stichtag) und ein Beruf. Mit Claude kommen passende Stichwörter, verwandte Funktionen und Anrechnungsregeln dazu; ohne KI sind die Stichwörter nur grob und sollten ergänzt werden.
 - **Funktion automatisch vorschlagen:** Aus Ausbildung und Tätigkeiten im Lebenslauf schlägt die App die passende Vorlage (Funktion des Einreihungsplans) vor – mit Claude oder über Stichwörter pro Vorlage – samt Begründung und Alternativen.
 - **CSV-Export** der Übersicht und aller Stellen.
+- **Excel im Aufbau der Berechnungsvorlage der Personalabteilung:** Pro Person «Excel (Vorlage Personal)» – Zuordnung 1) bis 6), Von/Bis, Pensum, Dauer in Tagen, Anrechnung in %, Σ DJ (Tage × Anrechnung / 365.2425), «x» für nicht mitgerechnete Zeilen und ein Blatt «Einstellungen» mit den Anrechnungssätzen (siehe «Berechnung»).
 
 ## KI-Auswertung mit Claude (optional)
 
@@ -106,7 +107,25 @@ Weitere Regeln pro Vorlage:
 
 Ablauf: Monat für Monat wird die Anrechnung bestimmt, danach folgen Mindestalter, Obergrenze Familienarbeit, Maximum und zuletzt die Rundung. Rechenweg und Regeln stehen in der App und im Bericht.
 
+### Abgleich mit der Berechnungsvorlage der Personalabteilung
+
+Die Excel-Vorlage «Vorlage Berechnung» (Stand 2024.06) rechnet pro Tätigkeit Tage × Anrechnung / 365.2425 und unterscheidet nach Pensum bis 50 % und über 50 %. Die App bildet dieselben Regeln ab; das Beispiel der Vorlage ergibt in beiden 17.42 Dienstjahre (Test in `tests/parser.test.js`).
+
+| Zuordnung in der Vorlage | Regel in der App | Anrechnung |
+|---|---|---|
+| 1) Ausbildungszeit (Studium, Lehre) | Erstausbildung, Zweitausbildung | 0 % |
+| 2a) Praktikumseinsätze | Praktikum | bis 50 %: 25 %, über 50 %: 50 % |
+| 2b) Frühere Tätigkeit als Klassenassistenz | Assistenz-Einsatz | Pensum × 100 % |
+| 3) Berufliche Tätigkeit ohne Verbindung | Andere Berufe | Pensum × 25 % |
+| 4) Assistenz → Tätigkeit ohne Verbindung | Andere Berufe bei Funktionen mit Zielberuf Assistenz | bis 50 %: 50 %, über 50 %: 100 % |
+| 5) In Verbindung bzw. identisch mit der Funktion | Zielberuf und verwandte Berufe | bis 50 %: 50 %, über 50 %: 100 % |
+| 6) Familienzeit | Familienarbeit | 33.33 % |
+| «Nicht mit berechnen» (x) | Häkchen «Anrechnen» entfernen | – |
+
+Unterschiede: Die App rechnet monatsgenau (die Vorlage tagesgenau), Abweichung höchstens einige Tage. Gleichzeitige Tätigkeiten summiert die Vorlage ohne Begrenzung, überzählige Zeilen streicht die Personalabteilung von Hand mit «x»; die App begrenzt die Summe pro Monat automatisch auf 100 % und kommt so auf dasselbe Ergebnis. Der Excel-Export zeigt beide Totale und vermerkt gleichzeitige Tätigkeiten in der Fussnote. Militär- und Zivildienst kommt in der Vorlage nicht vor und wird wie «ohne Verbindung» behandelt. Als Treuejahre angerechnete Zeiten (Vermerk in der Vorlage) bildet die App nicht ab.
+
 ### Lohneinreihung
+
 
 Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
 - **Lohnstufe:** volle anrechenbare Jahre + 1, höchstens die letzte Stufe der Gehaltstabelle (ohne Tabelle Stufe 10).

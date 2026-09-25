@@ -574,6 +574,26 @@
         return 'other';
     }
 
+    /**
+     * Zuordnung in der Berechnungsvorlage der Personalabteilung (Excel): 1) Ausbildung, 2a) Praktikum,
+     * 2b) Klassenassistenz, 3) ohne Verbindung, 4) Assistenz ohne Verbindung, 5) in Verbindung/identisch, 6) Familienzeit.
+     */
+    const HR_CATEGORY = { education: '1)', secondEducation: '1)', internship: '2a)', assistance: '2b)', other: '3)', same: '5)', related: '5)', family: '6)', service: '3)' };
+    const HR_CATEGORY_NAMES = {
+        '1)': 'Ausbildungszeit (Studium, Lehre) wird nicht berücksichtigt.',
+        '2a)': 'Praktikumseinsätze im sozial- und pädagogischen Bereich',
+        '2b)': 'Frühere Tätigkeit als Klassenassistenz (nicht Praktikum)',
+        '3)': 'Berufliche Tätigkeit OHNE Verbindung zur Aufgabe im SONNENBERG',
+        '4)': 'Assistenz -> Berufliche Tätigkeit OHNE Verbindung zur Aufgabe im SONNENBERG',
+        '5)': 'Berufliche Tätigkeiten in Verbindung bzw. identisch mit der Funktion im SONNENBERG',
+        '6)': 'Familienzeit (d.h. Vater und Mutter von Kindern von 0-18 Jahre).'
+    };
+    /** Zuordnung 1)–6) der Excel-Vorlage für einen Regel-Schlüssel; bei Assistenz-Funktionen zählt «ohne Verbindung» als 4). */
+    function hrCategory(ruleKey, tpl) {
+        if (ruleKey === 'other' && tpl && tpl.target === '__assistenz') return '4)';
+        return HR_CATEGORY[ruleKey] || '3)';
+    }
+
     /** Anrechnung eines Monats für diesen Eintrag in Prozent (0–100). */
     function weightFor(entry, tpl) {
         if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return Math.max(0, Math.min(100, +entry.factorOverride));
@@ -1195,7 +1215,8 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+
  parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;

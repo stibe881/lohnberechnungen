@@ -1400,6 +1400,7 @@
                 <button class="btn btn-ghost btn-sm" type="button" data-action="add">${icon('plus')} Stelle hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="report">Bericht (PDF)</button>
+                <button class="btn btn-ghost btn-sm" type="button" data-action="hrxlsx" title="Excel im Aufbau der Berechnungsvorlage der Personalabteilung (Zuordnung 1–6, Tage, Anrechnung, Σ DJ)">${icon('download')} Excel (Vorlage Personal)</button>
                 ${pl0 ? `<button class="btn btn-primary btn-sm" type="button" data-action="salary">${icon('file')} Lohnblatt (PDF)</button>` : ''}
             </div>
             ${section('salary', 'Lohn und Einreihung', pl0 ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl0))}</b></div><div class="placement-why">${esc(placementWhy(t, pl0))}</div>
@@ -1632,6 +1633,8 @@
             inputs[inputs.length - 1]?.focus();
         } else if (act.dataset.action === 'report') {
             previewPrint('Bericht', CVReport.page(buildView(c)));
+        } else if (act.dataset.action === 'hrxlsx') {
+            exportHrXlsx(c).catch(err => toast('Excel konnte nicht erstellt werden: ' + err.message, 'error'));
         } else if (act.dataset.action === 'salary') {
             previewPrint('Lohnblatt', CVReport.salaryPage(buildView(c)));
         } else if (act.dataset.action === 'reparse') {
@@ -1685,7 +1688,66 @@
         download('berufserfahrung.csv', csv, 'text/csv;charset=utf-8');
     });
 
+    /**
+     * Excel im Aufbau der Berechnungsvorlage der Personalabteilung («Vorlage Berechnung»): pro Tätigkeit
+     * Zuordnung 1)–6), Von (1. Tag), Bis (letzter Tag), Pensum, Dauer in Tagen, Anrechnung in %, Σ DJ (Tage × Anrechnung / 365.2425),
+     * «x» für nicht mitgerechnete Zeilen. Dazu ein Blatt «Einstellungen» mit den Anrechnungssätzen der Funktion.
+     */
+    async function exportHrXlsx(c) {
+        const X = await loadXlsx();
+        const t = tplOf(c), r = computeFor(c);
+        const cutoffIso = P.cutoffDate(t);
+        const cutoff = new Date(cutoffIso + 'T00:00:00');
+        const lastDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m, 0); };
+        const firstDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1); };
+        const DAYS = 365.2425;
+        const rows = [];
+        let total = 0;
+        c.entries.forEach((e, i) => {
+            const pe = r.perEntry[i];
+            if (!/^\d{4}-\d{2}$/.test(e.start) || (!e.ongoing && !/^\d{4}-\d{2}$/.test(e.end))) return;
+            const von = firstDay(e.start);
+            const bis = e.ongoing ? cutoff : lastDay(e.end);
+            const days = Math.round((bis - von) / 864e5) + 1;
+            const factor = e.include ? P.weightFor(e, t) : 0;
+            const dj = e.include && days > 0 ? days * factor / 100 / DAYS : null;
+            if (dj) total += dj;
+            const key = P.ruleKeyFor(e, t);
+            // Fussnote: gleichzeitige Tätigkeiten (die Vorlage summiert sie; die App begrenzt pro Monat auf 100 %)
+            const overlaps = e.include ? c.entries.filter(o => o !== e && o.include && /^\d{4}-\d{2}$/.test(o.start) && (o.ongoing || /^\d{4}-\d{2}$/.test(o.end))
+                && o.start <= (e.ongoing ? '9999-12' : e.end) && (o.ongoing ? '9999-12' : o.end) >= e.start && P.weightFor(o, t) > 0).map(o => `«${o.title}»`) : [];
+            const notes = [e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '' ? 'Anrechnung manuell gesetzt' : '', overlaps.length ? 'gleichzeitig mit ' + overlaps.join(', ') : ''].filter(Boolean).join('; ');
+            rows.push([`${P.hrCategory(key, t)} ${P.HR_CATEGORY_NAMES[P.hrCategory(key, t)]}`, [e.title, e.details].filter(Boolean).join(' – '), von, bis, +e.pensum || 0, days > 0 ? days : '', Math.round(factor * 100) / 100, dj === null ? '' : Math.round(dj * 10000) / 10000, e.include ? '' : 'x', notes]);
+
+        });
+        const head = [
+            ['Berufsdienstjahre – Berechnung', '', '', '', '', '', '', '', '', ''],
+            ['Name', c.name], ['Geburtsdatum', c.birth ? fmtDay(c.birth + '-01').slice(3) : ''], ['Funktion', t.name], ['Stichtag', fmtDay(cutoffIso)],
+
+            ['Total Tätigkeiten in Jahren (Tage / 365.2425)', Math.round(total * 100) / 100],
+            ['Total in der App (monatsgenau, gleichzeitige Tätigkeiten max. 100 %)', Math.round(r.exactYears * 100) / 100, r.rounded || r.capped ? `gerundet/begrenzt: ${fmt(r.creditedYears)}` : ''],
+            [],
+            ['Zuordnung Tätigkeit', 'Beschreibung Tätigkeit', 'Von (1. Tag) Datum', 'Bis (letzter Tag) Datum', 'Pensum in %', 'Dauer in Tagen', 'Anrechnung in %', 'Σ DJ', 'Nicht mit berechnen', '# Fussnote']
+        ];
+        const ws = X.utils.aoa_to_sheet(head.concat(rows), { cellDates: true });
+        ws['!cols'] = [{ wch: 62 }, { wch: 60 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 13 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 28 }];
+        rows.forEach((row, i) => ['C', 'D'].forEach(col => { const cell = ws[col + (head.length + i + 1)]; if (cell) { cell.t = 'd'; cell.z = 'dd.mm.yyyy'; } }));
+        const th = (k, label) => { const R = t.rules[k]; return [label, R.mode === 'threshold' ? R.low : R.mode === 'pensum' ? `Pensum × ${R.factor} %` : R.factor, R.mode === 'threshold' ? R.factor : R.mode === 'pensum' ? `Pensum × ${R.factor} %` : R.factor]; };
+        const settingsRows = [['Anrechnung in %', '<=50 % Pensum', '>50 % Pensum'],
+            th('education', '1) ' + P.HR_CATEGORY_NAMES['1)']), th('internship', '2a) ' + P.HR_CATEGORY_NAMES['2a)']), th('assistance', '2b) ' + P.HR_CATEGORY_NAMES['2b)']),
+            th('other', (t.target === '__assistenz' ? '4) ' + P.HR_CATEGORY_NAMES['4)'] : '3) ' + P.HR_CATEGORY_NAMES['3)'])), th('same', '5) ' + P.HR_CATEGORY_NAMES['5)']), th('family', '6) ' + P.HR_CATEGORY_NAMES['6)']),
+            [], ['Funktion', t.name], ['Regeln', rulesText(t)], ['Erstellt', new Date().toLocaleString('de-CH')], ['Quelle', settingsSourceText()]];
+        const ws2 = X.utils.aoa_to_sheet(settingsRows);
+        ws2['!cols'] = [{ wch: 80 }, { wch: 18 }, { wch: 18 }];
+        const wb = X.utils.book_new();
+        X.utils.book_append_sheet(wb, ws, 'Tätigkeit');
+        X.utils.book_append_sheet(wb, ws2, 'Einstellungen');
+        X.writeFile(wb, `Berechnung ${c.name.replace(/[\\/:*?"<>|]+/g, ' ').trim()}.xlsx`, { cellDates: true });
+        toast('Excel im Aufbau der Berechnungsvorlage erstellt.', 'ok');
+    }
+
     function download(name, content, type) {
+
         const url = URL.createObjectURL(new Blob([content], { type }));
         const a = document.createElement('a');
         a.href = url;

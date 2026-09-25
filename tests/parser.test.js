@@ -408,3 +408,34 @@ assert.strictEqual(ns.positions[0].status, 'offen');
 assert.deepStrictEqual(ns.retentionByStatus, { abgesagt: 90 });
 assert.strictEqual(ns.fourEyes, true);
 console.log('Korrekturen, Zulagen, Lohnentwicklung, Dubletten, Stellen bestanden.');
+
+// Berechnungsvorlage der Personalabteilung (Excel 2024.06): Zuordnung 1)–6) mit Anrechnung ≤50 % / >50 %,
+// Tage × Anrechnung / 365.2425, «x» = nicht mitrechnen. Das Beispiel der Vorlage ergibt 17.42 Dienstjahre.
+const hrRules = {
+    same: { mode: 'threshold', factor: 100, low: 50 }, related: { mode: 'threshold', factor: 100, low: 50 },   // 5) in Verbindung / identisch
+    other: { mode: 'pensum', factor: 25, low: 0 },                                                             // 3) ohne Verbindung: Pensum × 25 %
+    internship: { mode: 'threshold', factor: 50, low: 25 },                                                   // 2a) Praktikum
+    assistance: { mode: 'pensum', factor: 100, low: 0 },                                                       // 2b) Klassenassistenz: Pensum
+    family: { mode: 'flat', factor: 100 / 3, low: 0 },                                                         // 6) Familienzeit: ein Drittel
+    service: { mode: 'pensum', factor: 25, low: 0 },
+    education: { mode: 'flat', factor: 0, low: 0 }, secondEducation: { mode: 'flat', factor: 0, low: 0 }     // 1) Ausbildungszeit nicht berücksichtigt
+};
+const hrTpl = P.upgradeTemplate({ target: 'therapie', name: 'Päd. Therapeut*in', related: [], rules: hrRules, combine: 'sum', cutoff: 'yearEnd', rounding: 'none' });
+const hrE = (start, end, pensum, cat, include) => ({ id: start + end + pensum, title: 't', details: '', category: cat || 'therapie', start, end, ongoing: false, include: include !== false, pensum, factorOverride: null });
+const hrEntries = [hrE('2006-08', '2009-07', 100, '__ausbildung'), hrE('2009-08', '2012-07', 55), hrE('2012-08', '2014-06', 100), hrE('2014-07', '2015-06', 90), hrE('2015-07', '2017-06', 100),
+    hrE('2015-08', '2017-07', 50, null, false), hrE('2017-07', '2022-06', 100), hrE('2022-07', '2024-12', 80), hrE('2023-01', '2026-12', 20, null, false), hrE('2024-01', '2024-12', 70, null, false),
+    hrE('2025-01', '2026-09', 70), hrE('2025-01', '2026-09', 30, null, false), hrE('2026-10', '2026-12', 60)];
+const hrToday = new Date(2026, 8, 25);
+assert.strictEqual(P.compute(hrEntries, hrTpl, hrToday).exactYears.toFixed(2), '17.42');
+// Ohne manuelles «x»: Die Summe pro Monat wird bei 100 % begrenzt und ergibt dasselbe wie die von Hand ausgeschlossenen Zeilen
+assert.strictEqual(P.compute(hrEntries.map(e => Object.assign({}, e, { include: e.category !== '__ausbildung' })), hrTpl, hrToday).exactYears.toFixed(2), '17.42');
+// Einzelne Zuordnungen: 55 % in Verbindung → 100 %, 50 % → 50 %; Praktikum 40 % → 25 %; ohne Verbindung 80 % → 20 %; Familienzeit → 33.3 %
+assert.strictEqual(P.weightFor(hrE('2020-01', '2020-12', 55), hrTpl), 100);
+assert.strictEqual(P.weightFor(hrE('2020-01', '2020-12', 50), hrTpl), 50);
+assert.strictEqual(P.weightFor(hrE('2020-01', '2020-12', 40, '__praktikum'), hrTpl), 25);
+assert.strictEqual(P.weightFor(hrE('2020-01', '2020-12', 80, 'anderes'), hrTpl), 20);
+assert.strictEqual(P.weightFor(hrE('2020-01', '2020-12', 60, '__assistenz'), hrTpl), 60);
+assert.strictEqual(Math.round(P.weightFor(hrE('2020-01', '2020-12', 100, '__familie'), hrTpl) * 100) / 100, 33.33);
+// Zuordnung der Vorlage aus dem Regel-Schlüssel
+assert.deepStrictEqual(['education', 'internship', 'assistance', 'other', 'same', 'related', 'family', 'service'].map(k => P.hrCategory(k)), ['1)', '2a)', '2b)', '3)', '5)', '5)', '6)', '3)']);
+console.log('Berechnungsvorlage Personal (Excel) bestanden.');
