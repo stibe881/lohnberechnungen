@@ -117,7 +117,27 @@
         if (c.startDate > cutoff) return null;
         return { id: '__newjob', include: true, start: c.startDate.slice(0, 7), end: '', ongoing: true, title: 'Neue Stelle ab Stellenantritt', details: `${fmtDay(c.startDate)} bis Stichtag ${fmtDay(cutoff)}`, category: t.target, pensum: Math.round(pensumOf(c, t)), factorOverride: null, synthetic: true };
     }
-    const entriesFor = c => { const j = newJobEntry(c); return j ? c.entries.concat(j) : c.entries; };
+    /**
+     * Alle Einträge für die Berechnung: Lebenslauf-Stellen (laufende enden mit dem Stellenantritt),
+     * automatische Familienzeit aus den Geburtsmonaten der Kinder und die neue Stelle bis zum Stichtag.
+     */
+    function entriesFor(c) {
+        const t = tplOf(c);
+        const cutoffIdx = P.cutoffIndex(t, new Date());
+        const j = newJobEntry(c);
+        let base = c.entries;
+        if (j) {
+            // Die bisherige Stelle endet mit dem Stellenantritt (wie in der Berechnungsvorlage der Personalabteilung)
+            const startIdx = P.ymToIndex(j.start);
+            base = base.map(e => e.ongoing && P.ymToIndex(e.start) !== null && P.ymToIndex(e.start) < startIdx
+                ? Object.assign({}, e, { ongoing: false, end: idxToYm(startIdx - 1), cutByStart: true }) : e);
+        }
+        const fam = (c.children || []).length ? P.familyEntries(c.children, base, settings.familyMaxPensum ?? 99, j ? P.ymToIndex(j.start) - 1 : cutoffIdx) : [];
+        return base.concat(fam, j ? [j] : []);
+    }
+    const idxToYm = i => Math.floor(i / 12) + '-' + String((i % 12) + 1).padStart(2, '0');
+    /** Zusätzliche (automatische) Zeilen: Familienzeit und neue Stelle, mit ihrem Index in entriesFor(c). */
+    const syntheticRows = (c, all) => all.map((e, i) => ({ e, i })).filter(x => x.e.synthetic);
     const rawTplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
     /** Vorlage der Person; bei «gemäss Grundfunktion plus …» mit den Klassen der (gewählten) Grundfunktion. */
     const tplOf = c => P.effectiveTemplate(rawTplOf(c), settings.templates, c.baseTemplateId);
@@ -436,6 +456,7 @@
                 applySuggestion(c, res);
                 if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
                 if (res.birth && !c.birthEdited) c.birth = res.birth;
+                if (Array.isArray(res.children) && !c.childrenEdited) c.children = res.children;
                 c.source = 'ki';
                 c.model = ai.model || window.CVAi.DEFAULT_MODEL;
                 setStep(c, STEP_TEXT.calc);
@@ -449,7 +470,9 @@
         c.aiFlags = null;
         applySuggestion(c, null);
         if (!c.birthEdited) c.birth = P.extractBirth(c.text) || c.birth || '';
+        if (!c.childrenEdited) c.children = P.extractChildren(c.text);
         c.source = 'regeln';
+
         setStep(c, STEP_TEXT.calc);
     }
 
@@ -467,6 +490,8 @@
             positionId: '',
             startDate: '',         // Stellenantritt (aus der Stelle oder von Hand); zählt bis zum Stichtag als Erfahrung
             startDateEdited: false,
+            children: [],          // Geburtsmonate der Kinder «YYYY-MM» (aus dem Lebenslauf oder von Hand) → automatische Familienzeit
+            childrenEdited: false,
             status: 'neu',
             review: null,          // {checkedBy, checkedAt, approvedBy, approvedAt, snapshot}
             allowances: null,      // gewählte Zulagen (null = Vorschlag aus der Ausbildung)
@@ -1069,7 +1094,7 @@
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
         'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName',
-        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited'];
+        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited', 'children', 'childrenEdited'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -1330,8 +1355,12 @@
         if (edu.length) li('Ausbildung', edu.map(([e, pe]) => `«${esc(e.title)}»${e.include && pe.factor > 0 ? ` (${pe.factor} % angerechnet)` : ' (nicht angerechnet)'}`).join(', '));
         li('Erfahrung', formulaHtml(c, r, t));
         if (pl && !pl.fixed) {
-            const nj = newJobEntry(c);
-            if (nj) li('Neue Stelle', `ab ${esc(fmtDay(c.startDate))} bis Stichtag ${esc(fmtDay(P.cutoffDate(t)))} bei ${nj.pensum} % → ${fmt(r.perEntry[c.entries.length].credited / 12)} J. im Zielberuf (wie in der Berechnungsvorlage der Personalabteilung)`);
+            const allE = entriesFor(c);
+            const njI = allE.findIndex(e => e.id === '__newjob');
+            if (njI >= 0) li('Neue Stelle', `ab ${esc(fmtDay(c.startDate))} bis Stichtag ${esc(fmtDay(P.cutoffDate(t)))} bei ${allE[njI].pensum} % → ${fmt(r.perEntry[njI].credited / 12)} J. im Zielberuf; laufende Stellen enden mit dem Stellenantritt (wie in der Berechnungsvorlage der Personalabteilung)`);
+            const famI = allE.map((e, i) => e.synthetic && e.category === '__familie' ? i : -1).filter(i => i >= 0);
+            if (famI.length) li('Familienzeit', `automatisch aus den Kindern (${esc((c.children || []).join(', '))}): ${famI.map(i => `${allE[i].start.split('-').reverse().join('.')}–${allE[i].end.split('-').reverse().join('.')}`).join(', ')} → ${fmt(famI.reduce((a, i) => a + r.perEntry[i].credited, 0) / 12)} J. (Kinder unter 18, Arbeitspensum höchstens ${settings.familyMaxPensum ?? 99} %)`);
+            else if ((c.children || []).length) li('Familienzeit', 'Kinder erfasst, aber kein Monat mit Arbeitspensum unter der Grenze');
             li('Stufe', `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.stage >= pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : t.stageMode === 'plusOne' ? ' (Dienstjahre + 1)' : pl.years < 1 ? ' (mindestens Stufe 1)' : ' (volle Dienstjahre = Stufe)'}`);
             const ups = t.classUpYears || [];
             const next = ups.find(n => pl.years < n);
@@ -1394,6 +1423,7 @@
 
         const tl = timelineHtml(c, r);
         const pl0 = placementFor(c, r);
+        const all = entriesFor(c);
         el.innerHTML = `<div class="card">
             <div class="detail-head">
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
@@ -1401,7 +1431,8 @@
                     <label class="field"><span>Status</span><select data-cf="status" class="status-select st-${esc(c.status || 'neu')}">${P.STATUSES.map(st => `<option value="${st.id}"${(c.status || 'neu') === st.id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
                     <label class="field"><span>Offene Stelle</span><select data-cf="positionId"><option value="">keine</option>${(settings.positions || []).filter(p => p.status === 'offen' || p.id === c.positionId).map(p => `<option value="${esc(p.id)}"${p.id === c.positionId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</select></label>
-                    <label class="field" title="Die neue Stelle zählt ab Stellenantritt bis zum Stichtag als Erfahrung im Zielberuf (wie in der Berechnungsvorlage der Personalabteilung)"><span>Stellenantritt</span><input type="date" data-cf="startDate" value="${esc(c.startDate || '')}"></label>
+                    <label class="field" title="Die neue Stelle zählt ab Stellenantritt bis zum Stichtag als Erfahrung im Zielberuf; laufende Stellen enden damit (wie in der Berechnungsvorlage der Personalabteilung)"><span>Stellenantritt</span><input type="date" data-cf="startDate" value="${esc(c.startDate || '')}"></label>
+                    <label class="field" title="Geburtsmonate der Kinder, z. B. 2009-08, 2012-03. Monate mit Kindern unter 18 und Arbeitspensum höchstens ${settings.familyMaxPensum ?? 99} % zählen automatisch als Familienzeit (Einstellungen → Funktionen)."><span>Kinder (Geburtsmonate)</span><input type="text" data-cf="children" value="${esc((c.children || []).join(', '))}" placeholder="z. B. 2009-08, 2012-03"></label>
                     <label class="field"><span>Funktion</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
                     ${rawTplOf(c).baseTemplateId ? `<label class="field"><span>Grundfunktion</span><select data-cf="baseTemplateId">${settings.templates.filter(x => x.id !== t.id && x.classMin && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === (c.baseTemplateId || rawTplOf(c).baseTemplateId) ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
                     ${t.classMin || t.fixedAnnual ? `${t.lessonsFull
@@ -1447,8 +1478,8 @@
                     <th title="Anrechnen">${icon('check', 'Anrechnen')}</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
                     <th>Pensum</th><th class="num">Dauer</th><th title="Anrechnung pro Monat nach den Regeln der Vorlage; überschreibbar">Anrechnung</th><th class="num">Angerechnet</th><th></th>
                 </tr></thead>
-                <tbody>${rows}${(j => j ? `<tr class="newjob" title="Wie in der Berechnungsvorlage der Personalabteilung: Die neue Stelle zählt ab Stellenantritt bis zum Stichtag. Datum oben bei «Stellenantritt» ändern oder leeren."><td>${icon('check')}</td><td class="c-title"><b>${esc(j.title)}</b><div class="details">${esc(j.details)}</div></td><td>${esc(catName(j.category))}</td><td>${esc(fmtDay(c.startDate))}</td><td>${esc(fmtDay(P.cutoffDate(t)))}</td><td>${j.pensum} %</td><td class="num">${fmtYM(r.perEntry[c.entries.length].months / 12)}</td><td><div class="factor-auto">${r.perEntry[c.entries.length].factor} % · Zielberuf</div></td><td class="num"><strong>${fmt(r.perEntry[c.entries.length].credited / 12)}</strong></td><td></td></tr>` : '')(newJobEntry(c))}</tbody>
-            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>', true, `${c.entries.length} Einträge${newJobEntry(c) ? ' + neue Stelle' : ''}${overrideCount(c) ? `, ${overrideCount(c)} manuell` : ''}`)}
+                <tbody>${rows}${syntheticRows(c, all).map(({ e, i }) => `<tr class="newjob" title="${e.id === '__newjob' ? 'Wie in der Berechnungsvorlage der Personalabteilung: Die neue Stelle zählt ab Stellenantritt bis zum Stichtag. Datum oben bei «Stellenantritt» ändern oder leeren.' : `Automatische Familienzeit: Kinder unter 18 und Arbeitspensum höchstens ${settings.familyMaxPensum ?? 99} %. Geburtsmonate oben bei «Kinder» ändern oder leeren.`}"><td>${icon('check')}</td><td class="c-title"><b>${esc(e.title)}</b><div class="details">${esc(e.details)}</div></td><td>${esc(catName(e.category))}</td><td>${e.id === '__newjob' ? esc(fmtDay(c.startDate)) : esc(e.start.split('-').reverse().join('.'))}</td><td>${e.id === '__newjob' ? esc(fmtDay(P.cutoffDate(t))) : esc(e.end.split('-').reverse().join('.'))}</td><td>${e.pensum} %</td><td class="num">${fmtYM(r.perEntry[i].months / 12)}</td><td><div class="factor-auto">${r.perEntry[i].factor} % · ${esc((P.RULE_KEYS.find(k => k.id === r.perEntry[i].ruleKey) || {}).name || '')}</div></td><td class="num"><strong>${fmt(r.perEntry[i].credited / 12)}</strong></td><td></td></tr>`).join('')}</tbody>
+            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>', true, `${c.entries.length} Einträge${syntheticRows(c, all).length ? ` + ${syntheticRows(c, all).length} automatisch` : ''}${overrideCount(c) ? `, ${overrideCount(c)} manuell` : ''}`)}
             ${c.text.trim() ? section('text', 'Erkannter Text', `<pre class="rawtext-pre">${esc(c.text)}</pre>`, false) : ''}
         </div>`;
     }
@@ -1593,6 +1624,10 @@
                 : t.value;
             if (t.dataset.cf === 'name') c.autoName = false;
             if (t.dataset.cf === 'startDate') c.startDateEdited = true;
+            if (t.dataset.cf === 'children') {
+                c.children = t.value.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean).map(x => /^\d{4}$/.test(x) ? x + '-01' : /^(\d{1,2})\.(\d{4})$/.test(x) ? x.replace(/^(\d{1,2})\.(\d{4})$/, (m, mm, y) => `${y}-${mm.padStart(2, '0')}`) : x).filter(x => /^\d{4}-\d{2}$/.test(x));
+                c.childrenEdited = true;
+            }
             if (t.dataset.cf === 'templateId') { c.autoTemplate = false; c.baseTemplateId = ''; }
             if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
@@ -1735,7 +1770,8 @@
         entriesFor(c).forEach((e, i) => {
             const pe = r.perEntry[i];
             if (!/^\d{4}-\d{2}$/.test(e.start) || (!e.ongoing && !/^\d{4}-\d{2}$/.test(e.end))) return;
-            const von = e.synthetic ? new Date(c.startDate + 'T00:00:00') : firstDay(e.start);
+            const von = e.id === '__newjob' ? new Date(c.startDate + 'T00:00:00') : firstDay(e.start);
+
 
             const bis = e.ongoing ? cutoff : lastDay(e.end);
             const days = Math.round((bis - von) / 864e5) + 1;
@@ -2115,6 +2151,7 @@
         $('#retentionDays').value = draft.retentionDays ?? '';
         $('#retentionByStatus').innerHTML = P.STATUSES.map(st => `<label class="field"><span>${esc(st.name)}</span><div class="suffix"><input type="number" min="0" step="1" data-rs="${st.id}" value="${draft.retentionByStatus?.[st.id] ?? ''}" placeholder="–"><em>Tage</em></div></label>`).join('');
         $('#fourEyes').checked = !!draft.fourEyes;
+        $('#familyMaxPensum').value = draft.familyMaxPensum ?? 99;
         renderPrintForm();
         updateSettingsNav();
     }
@@ -2372,6 +2409,8 @@
         draft.retentionByStatus = {};
         document.querySelectorAll('[data-rs]').forEach(inp => { if (inp.value.trim() !== '' && +inp.value >= 0) draft.retentionByStatus[inp.dataset.rs] = Math.round(+inp.value); });
         draft.fourEyes = $('#fourEyes').checked;
+        draft.familyMaxPensum = Math.max(0, Math.min(100, Math.round(+$('#familyMaxPensum').value) || 0));
+
         const days = $('#retentionDays').value.trim();
         draft.retentionDays = days === '' ? null : Math.max(0, Math.round(+days) || 0);
         draft.print = Object.assign(draft.print || { logo: '' }, { org: $('#printOrg').value.trim(), footer: $('#printFooter').value.trim() });

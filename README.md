@@ -127,6 +127,8 @@ Weitere Regeln aus der Praxis der Personalabteilung, die die App übernimmt:
 
 - **Lohnstufe = volle Dienstjahre** (3.35 Jahre → Stufe 3, mindestens Stufe 1). Pro Funktion umstellbar auf «Dienstjahre + 1» (Einstellungen → Funktion → Lohn).
 - **Die neue Stelle zählt ab Stellenantritt bis zum Stichtag 31.12.** als Erfahrung im Zielberuf. Das Datum kommt aus der offenen Stelle oder wird bei der Person unter «Stellenantritt» eingetragen; die Zeile erscheint grün in der Stellenliste.
+- **Familienzeit automatisch aus den Kindern.** Bei der Person unter «Kinder (Geburtsmonate)» eintragen (Claude liest sie aus dem Lebenslauf, z. B. «Kinder: Lena (2009), Noah (2012)»). Jeder Monat mit einem Kind unter 18, in dem das Arbeitspensum aller Stellen unter 100 % liegt (Grenze unter Einstellungen → Funktionen → «Familienzeit automatisch»), zählt als Familienzeit mit 33 % – zusätzlich zu Teilzeitstellen, wie in der Vorlage. Eigene Familienzeit-Einträge im Lebenslauf haben Vorrang.
+- **Laufende Stellen enden mit dem Stellenantritt.** Ist ein Stellenantritt gesetzt, zählen «bis heute»-Stellen nur bis zum Monat davor; ab dann zählt die neue Stelle.
 - **Stundenlohn-Jobs während einer Ausbildung** (Studium, Lehre) werden nicht angerechnet; Stundenlohn-Jobs danach mit 100 % (Pensum unbekannt, änderbar). Einträge unter «Öffentlichkeitsarbeit», «Ehrenamt», «Vereine» werden erfasst, aber nicht angerechnet. Sprachaufenthalte gelten als Ausbildungszeit.
 - Pensum-Angaben vor der Tätigkeit («(73%) Sprachheilschule», «(Std) Skischule») und offene Zeiträume mit Strich («08. 2025 –») werden erkannt; «Berufliche Aus- und Weiterbildungen» und «Zusätzliche Weiterbildung» gelten als Ausbildung.
 

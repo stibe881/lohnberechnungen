@@ -275,6 +275,8 @@
         // Kopf- und Fusszeile der Druckausgaben (Bericht, Lohnblatt)
         const pr = s.print || {};
         out.print = { org: String(pr.org || '').slice(0, 120), footer: String(pr.footer || '').slice(0, 400), logo: /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/.test(pr.logo || '') && pr.logo.length < 400000 ? pr.logo : '' };
+        // Familienzeit automatisch: Monate mit Kindern unter 18, in denen das Arbeitspensum höchstens so viel Prozent beträgt (Praxis Personalabteilung: unter 100 %, also 99)
+        out.familyMaxPensum = s.familyMaxPensum === null || s.familyMaxPensum === undefined || s.familyMaxPensum === '' ? 99 : Math.max(0, Math.min(100, Math.round(+s.familyMaxPensum) || 0));
         const tables = Array.isArray(s.salaryTables) ? s.salaryTables : s.salaryTable ? [s.salaryTable] : [];
         out.salaryTables = tables.filter(t => t && t.classes && Object.keys(t.classes).length).map(normalizeSalaryTable);
         const tableIds = new Set(out.salaryTables.map(t => t.id));
@@ -635,8 +637,67 @@
         return HR_CATEGORY[ruleKey] || '3)';
     }
 
+    /**
+     * Familienzeit aus den Geburtsmonaten der Kinder: Jeder Monat, in dem ein Kind unter 18 ist und das Arbeitspensum
+     * aller angerechneten Stellen höchstens maxPensum % beträgt, zählt als Familienzeit (Praxis der Personalabteilung).
+     * Monate, die schon ein eigener Familienzeit-Eintrag abdeckt, werden ausgelassen.
+     * @param {string[]} children  Geburtsmonate «YYYY-MM»
+     * @returns {Array} Einträge (category '__familie', synthetic: true)
+     */
+    function familyEntries(children, entries, maxPensum, endIdx) {
+        const kids = (children || []).map(ymToIndex).filter(k => k !== null);
+        if (!kids.length) return [];
+        const from = Math.min(...kids), to = Math.min(endIdx, Math.max(...kids) + 18 * 12 - 1);
+        const work = new Map(), covered = new Set();
+        for (const e of entries) {
+            const s = ymToIndex(e.start), en = e.ongoing ? endIdx : ymToIndex(e.end);
+            if (s === null || en === null || !e.include) continue;
+            for (let k = s; k <= en; k++) {
+                if (e.category === '__familie') covered.add(k);
+                else if (!NOT_WORK.has(e.category)) work.set(k, (work.get(k) || 0) + (+e.pensum || 0));
+            }
+        }
+        const out = [];
+        let run = null;
+        const close = () => { if (run) { out.push({ id: '__familie_' + run.s, include: true, start: indexToYm(run.s), end: indexToYm(run.e), ongoing: false, title: 'Familienzeit (Kinder unter 18)', details: `automatisch: Arbeitspensum höchstens ${maxPensum} %`, category: '__familie', pensum: 100, factorOverride: null, synthetic: true }); run = null; } };
+        for (let k = from; k <= to; k++) {
+            const ok = !covered.has(k) && (work.get(k) || 0) <= maxPensum;
+            if (ok) { if (run && run.e === k - 1) run.e = k; else { close(); run = { s: k, e: k }; } } else close();
+        }
+        close();
+        return out;
+    }
+    const indexToYm = i => Math.floor(i / 12) + '-' + String((i % 12) + 1).padStart(2, '0');
+
+    const MONTH_NAMES = { januar: 1, jan: 1, februar: 2, feb: 2, märz: 3, maerz: 3, mär: 3, april: 4, apr: 4, mai: 5, juni: 6, jun: 6, juli: 7, jul: 7, august: 8, aug: 8, september: 9, sep: 9, sept: 9, oktober: 10, okt: 10, november: 11, nov: 11, dezember: 12, dez: 12 };
+    /**
+     * Geburtsmonate der Kinder aus dem Lebenslauf («Kinder: Lena (August 2009), Noah (03.2012)», «2 Kinder, 2009 und 2012»).
+     * @returns {string[]} «YYYY-MM» (Monat 01, wenn nur das Jahr steht)
+     */
+    function extractChildren(text, today) {
+        const maxYear = (today || new Date()).getFullYear();
+        const out = [];
+        for (const line of text.split(/\r?\n/)) {
+            if (!/\b(kinder|kind|tochter|sohn|töchter|söhne)\b/i.test(line) || /kinderbetreu|kindergarten|kinderkrippe|kinderarzt|kinderheim|kinderspital|kinderpfleg/i.test(line)) continue;
+            const seg = line.replace(/^.*?\b(kinder|kind|tochter|sohn|töchter|söhne)\b/i, '');
+            const re = /(?:\b(\d{1,2})[./](\d{4})\b)|(?:\b([a-zäöü]{3,9})\.?\s+(\d{4})\b)|(?:\b(19[5-9]\d|20\d\d)\b)/gi;
+            let m;
+            while ((m = re.exec(seg))) {
+                let y, mo = 1;
+                if (m[2]) { y = +m[2]; mo = +m[1]; }
+                else if (m[4]) { y = +m[4]; mo = MONTH_NAMES[m[3].toLowerCase()] || 1; }
+                else y = +m[5];
+                if (y >= 1950 && y <= maxYear && mo >= 1 && mo <= 12) out.push(`${y}-${String(mo).padStart(2, '0')}`);
+            }
+            if (out.length) break;
+        }
+        return [...new Set(out)];
+    }
+
     /** Anrechnung eines Monats für diesen Eintrag in Prozent (0–100). */
     function weightFor(entry, tpl) {
+
+
         if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return Math.max(0, Math.min(100, +entry.factorOverride));
         const r = tpl.rules[ruleKeyFor(entry, tpl)] || { mode: 'flat', factor: 0 };
         const pensum = Math.max(0, Math.min(100, +entry.pensum || 0));
@@ -1266,7 +1327,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+    const api = { extractEntries, extractBirth, extractChildren, familyEntries, cutoffIndex, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
 
  parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

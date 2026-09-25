@@ -28,6 +28,7 @@ Erfasse jede berufliche Tätigkeit und jede Ausbildung, die einen Zeitraum hat, 
 - note: nur ausfüllen, wenn Beruf, Daten oder Pensum unsicher sind (ein kurzer Satz), sonst leerer String.
 - name: vollständiger Name der Person, falls ersichtlich, sonst leerer String.
 - birth_year/birth_month: Geburtsdatum, falls angegeben, sonst null.
+- children: Geburtsjahr und -monat jedes Kindes, falls im Lebenslauf angegeben (z. B. «Kinder: Lea (2009), Tim (2012)» oder «zwei Kinder, 2009 und 2012»); Monat null, wenn nur das Jahr steht. Keine Kinder genannt → leere Liste. Nicht raten.
 - flags.leadership_years: Jahre mit Führungsverantwortung (Personalführung), überlappende Stellen nur einmal; flags.leadership_training: abgeschlossene anerkannte Führungsausbildung (z. B. CAS/MAS Führung, SVF, Institutionsleitung); flags.foreign_diploma: die für die Funktion massgebende Ausbildung wurde im Ausland erworben; flags.qualification_matches_function: die Person hat die für die gewählte Funktion (function_id) vorausgesetzte Ausbildung – ohne gewählte Funktion true.
 - hinweise: höchstens zwei kurze Sätze zu Auffälligkeiten, die für die Anrechnung wichtig sind (z. B. widersprüchliche Daten), sonst leerer String.
 
@@ -42,9 +43,10 @@ function buildSchema(categoryIds, functionIds) {
     return {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'birth_year', 'birth_month', 'hinweise', 'entries', 'flags'].concat(Object.keys(fn)),
+        required: ['name', 'birth_year', 'birth_month', 'children', 'hinweise', 'entries', 'flags'].concat(Object.keys(fn)),
         properties: {
             ...fn,
+            children: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['year', 'month'], properties: { year: intOrNull, month: intOrNull } } },
             flags: {
                 type: 'object', additionalProperties: false,
                 required: ['leadership_years', 'leadership_training', 'foreign_diploma', 'qualification_matches_function'],
@@ -228,7 +230,10 @@ export async function analyze({ apiKey, serverUrl, password, model, categories, 
     const functionId = fns.some(f => f.id === data.function_id) ? data.function_id : '';
     const fl = data.flags || {};
     const flags = { leadershipYears: typeof fl.leadership_years === 'number' ? fl.leadership_years : undefined, leadershipTraining: fl.leadership_training, foreignDiploma: fl.foreign_diploma, qualificationMatches: fl.qualification_matches_function, forFunction: functionId };
-    return { name: (data.name || '').trim(), birth, hinweise: (data.hinweise || '').trim(), entries, functionId, functionReason: functionId ? (data.function_reason || '').trim() : '', flags };
+    const children = (Array.isArray(data.children) ? data.children : []).filter(k => k && Number.isInteger(k.year) && k.year > 1950 && k.year <= today.getFullYear())
+        .map(k => `${k.year}-${pad(validMonth(k.month) ?? 1)}`);
+    return { name: (data.name || '').trim(), birth, children, hinweise: (data.hinweise || '').trim(), entries, functionId, functionReason: functionId ? (data.function_reason || '').trim() : '', flags };
+
 }
 
 const SALARY_PROMPT = `Du liest eine Lohn- bzw. Gehaltstabelle (Besoldungstabelle) aus. Die Tabelle nennt für jede Lohnklasse die Löhne pro Lohnstufe (Erfahrungsstufe).

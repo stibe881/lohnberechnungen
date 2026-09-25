@@ -494,3 +494,18 @@ const paEntries = [paE('2005-08', '2008-07', 100, '__ausbildung', false), paE('2
 assert.strictEqual(P.compute(paEntries, paTpl, hrToday).exactYears.toFixed(2), '17.79');
 assert.ok(P.compute(paEntries, Object.assign({}, paTpl, { combine: 'sum' }), hrToday).exactYears < 17); // mit Begrenzung auf 100 % pro Monat deutlich weniger
 console.log('Berechnungsvorlage Personal, Beispiel 2 (Assistenz, Summe ohne Begrenzung) bestanden.');
+
+// Familienzeit automatisch aus den Kindern (Praxis Personalabteilung): Monate mit Kind unter 18 und Arbeitspensum unter 100 %
+const famWork = [paE('2009-08', '2010-07', 20, 'gastro'), paE('2016-01', '2026-05', 30, 'gastro'), paE('2018-03', '2021-06', 40, 'gastro'), paE('2021-07', '2022-11', 80, 'gastro'), paE('2023-07', '2026-05', 70, 'gastro')];
+const famAuto = P.familyEntries(['2009-08', '2012-03'], famWork, 99, 2026 * 12 + 4); // bis 05.2026 (Stellenantritt 06.2026)
+assert.deepStrictEqual(famAuto.map(f => f.start + '–' + f.end), ['2009-08–2021-06', '2022-12–2023-06']);
+assert.ok(famAuto.every(f => f.category === '__familie' && f.synthetic));
+assert.deepStrictEqual(P.familyEntries(['2009-08'], famWork.concat(paE('2009-08', '2010-07', 100, '__familie')), 99, 2010 * 12 + 11).map(f => f.start + '–' + f.end), ['2010-08–2010-12']); // eigener Familienzeit-Eintrag deckt 08.2009–07.2010 ab
+assert.deepStrictEqual(P.familyEntries([], famWork, 99, 2026 * 12), []);
+assert.deepStrictEqual(P.extractChildren('Kinder: Lena (August 2009), Noah (03.2012)', hrToday), ['2009-08', '2012-03']);
+assert.deepStrictEqual(P.extractChildren('Zivilstand: verheiratet, 2 Kinder (2009 und 2012)\nKinderbetreuung Kita 2015', hrToday), ['2009-01', '2012-01']);
+assert.deepStrictEqual(P.extractChildren('Praktikum Kinderkrippe 2015', hrToday), []);
+// Gesamtbeispiel: Lebenslauf-Stellen + automatische Familienzeit + neue Stelle = 17.80 wie in der Vorlage
+const famAll = paEntries.filter(e => e.category !== '__familie' && e.category !== '__assistenz').concat(famAuto, paE('2026-06', '2026-12', 80, '__assistenz'));
+assert.strictEqual(P.compute(famAll, paTpl, hrToday).exactYears.toFixed(2), '17.79');
+console.log('Familienzeit automatisch (Kinder) bestanden.');
