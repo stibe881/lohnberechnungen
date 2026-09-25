@@ -20,6 +20,7 @@
             </div>
             <nav class="row-gap top-nav">
                 <a class="btn btn-ghost" id="openApplicants" href="#bewerbende"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Bewerbende</a>
+                <a class="btn btn-ghost" id="openPositions" href="#stellen"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg> Offene Stellen</a>
                 <button class="btn btn-ghost" id="openSettings" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Einstellungen</button>
             </nav>
         </div>
@@ -78,6 +79,51 @@
         <section id="detail"></section>
     </main>
 
+    <!-- Offene Stellen -->
+    <main class="wrap" id="viewPositions" hidden>
+        <section class="card">
+            <div class="section-head">
+                <div>
+                    <h2>Offene Stellen</h2>
+                    <p class="hint" id="positionsInfo"></p>
+                </div>
+                <div class="row-gap">
+                    <a class="btn btn-ghost" href="#"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg> Zur Startseite</a>
+                    <button class="btn btn-primary" type="button" id="addPosition"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Neue Stelle</button>
+                </div>
+            </div>
+            <div class="seg" role="tablist" aria-label="Stellen filtern">
+                <button type="button" class="seg-btn active" data-posfilter="offen">Offen</button>
+                <button type="button" class="seg-btn" data-posfilter="alle">Alle</button>
+            </div>
+            <div id="positionsList" class="positions-grid"></div>
+        </section>
+    </main>
+
+    <!-- Stelle bearbeiten -->
+    <dialog id="positionDialog" class="dialog">
+        <form method="dialog" class="dialog-inner" id="positionForm">
+            <h2 id="positionDialogTitle">Neue Stelle</h2>
+            <label class="field"><span>Bezeichnung der Stelle</span><input type="text" id="posTitle" placeholder="z. B. Sozialpädagogin/Sozialpädagoge Wohngruppe 80 %" required></label>
+            <label class="field"><span>Funktion (Einreihungsplan)</span><select id="posTemplate"></select></label>
+            <div class="grid-2">
+                <label class="field" id="posPensumField"><span>Pensum</span><div class="suffix"><input type="number" id="posPensum" min="1" max="100" value="100"><em>%</em></div></label>
+                <label class="field" id="posLessonsField"><span>Lektionen</span><div class="suffix"><input type="number" id="posLessons" min="0.5" step="0.5"><em>Lekt.</em></div></label>
+                <label class="field"><span>Stellenantritt</span><input type="date" id="posStart"></label>
+                <label class="field"><span>Status</span><select id="posStatus"><option value="offen">offen</option><option value="besetzt">besetzt</option><option value="geschlossen">geschlossen</option></select></label>
+            </div>
+            <label class="field"><span>Notiz</span><textarea id="posNote" rows="2" placeholder="z. B. Team, Ausschreibung bis …"></textarea></label>
+            <p class="hint">Stellen werden mit den zentralen Einstellungen für alle gespeichert.</p>
+            <div class="dialog-actions spread">
+                <button class="btn btn-ghost btn-danger" type="button" id="deletePosition">Stelle löschen</button>
+                <div class="row-gap">
+                    <button class="btn btn-ghost" value="cancel" formnovalidate>Abbrechen</button>
+                    <button class="btn btn-primary" value="save">Speichern</button>
+                </div>
+            </div>
+        </form>
+    </dialog>
+
     <!-- Bewerbende: alle gespeicherten Auswertungen mit Suche -->
     <main class="wrap" id="viewApplicants" hidden>
         <section class="card">
@@ -86,13 +132,18 @@
                 <a class="btn btn-ghost" href="#"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg> Zur Startseite</a>
             </div>
             <label class="search-field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="search" id="applicantSearch" placeholder="Suchen nach Name, Funktion, Stelle, Ausbildung …" aria-label="Bewerbende suchen" autocomplete="off"></label>
+            <div class="filter-row">
+                <div class="seg" id="statusFilter" role="tablist" aria-label="Nach Status filtern"></div>
+                <label class="field inline"><span>Stelle</span><select id="positionFilter"></select></label>
+            </div>
             <p class="hint" id="applicantsInfo"></p>
             <div class="table-scroll">
                 <table class="table overview-table applicants-table">
                     <thead>
                         <tr>
+                            <th>Status</th>
                             <th>Person</th>
-                            <th>Funktion / Vorlage</th>
+                            <th>Funktion / Stelle</th>
                             <th class="num">Anrechenbar</th>
                             <th class="num">Einreihung</th>
                             <th>Ausgewertet</th>
@@ -103,6 +154,10 @@
                     <tbody id="applicantsBody"></tbody>
                 </table>
             </div>
+        </section>
+        <section class="card" id="compareCard" hidden>
+            <div class="section-head"><h2 id="compareTitle">Vergleich</h2></div>
+            <div class="table-scroll"><table class="table compare-table" id="compareTable"></table></div>
         </section>
         <div id="applicantDetail"></div>
         <section class="card" id="cvCard" hidden>
@@ -156,6 +211,7 @@
                             <div class="grid-2">
                                 <label class="field"><span>Zugangspasswort</span><input type="password" id="aiPassword" autocomplete="off" placeholder="aus config.php «password»"></label>
                                 <label class="field" id="adminPasswordField"><span>Admin-Passwort (nur zum Speichern)</span><input type="password" id="adminPassword" autocomplete="off"></label>
+                                <label class="field"><span>Dein Name (für Prüfung und Freigabe)</span><input type="text" id="userName" autocomplete="name" placeholder="z. B. Sabine Muster"></label>
                             </div>
                         </div>
                         <div class="set-card">
@@ -169,6 +225,13 @@
                                 <label class="field"><span>Aufbewahrung</span><div class="suffix"><input type="number" id="retentionDays" min="0" step="1" placeholder="Server"><em>Tage</em></div></label>
                                 <p class="hint">Nach so vielen Tagen ohne Änderung werden Person und Lebenslauf endgültig gelöscht. 0 = nie, leer = Vorgabe des Servers.</p>
                             </div>
+                            <div class="status-retention">
+                                <span class="hint">Abweichend je Status (leer = wie oben):</span>
+                                <div class="grid-5" id="retentionByStatus"></div>
+                            </div>
+                        </div>
+                        <div class="set-card">
+                            <label class="switch-row"><input type="checkbox" id="fourEyes" class="switch"><span><b>Vier-Augen-Prinzip</b><small>Eine Auswertung muss von einer zweiten Person freigegeben werden, nachdem sie geprüft wurde. Gilt für alle.</small></span></label>
                         </div>
                     </section>
 
@@ -209,7 +272,14 @@
                             <button class="btn btn-ghost" type="button" data-goto="data"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 13h4"/><path d="M10 17h4"/></svg> Aus Reglement erstellen</button>
                             <button class="btn btn-primary" type="button" id="addTpl"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Neue Funktion</button>
                         </div>
-                        <div id="tplList" class="tpl-list"></div>
+                        <div id="tplList"></div>
+                        <div class="set-card">
+                            <div class="card-head-row">
+                                <div><h4>Korrekturen der Lohnklasse</h4><p class="hint">Zum Beispiel −1 bei fehlender Ausbildung. Mit einer Regel schlägt die App die Korrektur bei passenden Lebensläufen automatisch vor.</p></div>
+                                <button class="btn btn-ghost btn-sm" type="button" id="addAdj"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Korrektur</button>
+                            </div>
+                            <div id="adjList" class="adj-list"></div>
+                        </div>
                     </section>
 
                     <!-- Gehaltstabellen -->

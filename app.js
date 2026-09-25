@@ -68,6 +68,9 @@
         lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
         pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
         x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+        plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+        copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
         trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
         check: '<path d="M20 6 9 17l-5-5"/>',
         clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
@@ -88,6 +91,15 @@
     const catName = id => (allCats().find(c => c.id === id) || { name: '–' }).name;
     const uid = () => 'c' + Math.random().toString(36).slice(2, 9);
     const AUTO = '__auto'; // «Funktion automatisch vorschlagen»
+    const isPosChoice = v => typeof v === 'string' && v.startsWith('pos:');
+    const positionOf = id => (settings.positions || []).find(p => p.id === id) || null;
+    /** Person einer offenen Stelle zuordnen: Funktion und Pensum der Stelle übernehmen. */
+    function applyPosition(c, pos) {
+        c.positionId = pos.id;
+        if (pos.templateId && settings.templates.some(t => t.id === pos.templateId)) { c.templateId = pos.templateId; c.autoTemplate = false; c.baseTemplateId = ''; }
+        c.newPensum = pos.pensum || 100;
+        c.newLessons = pos.lessons ?? null;
+    }
     const rawTplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
     /** Vorlage der Person; bei «gemäss Grundfunktion plus …» mit den Klassen der (gewählten) Grundfunktion. */
     const tplOf = c => P.effectiveTemplate(rawTplOf(c), settings.templates, c.baseTemplateId);
@@ -130,20 +142,62 @@
     }
     const tableLabel = st => `«${st.name}»${st.validFrom ? ', gültig ab ' + fmtDay(st.validFrom) : ''}`;
 
+    /** Gewählte Zulagen der Person (ohne eigene Wahl: vorgeschlagen aufgrund der Ausbildung). */
+    function allowancesOf(c, t) {
+        const all = t.allowances || [];
+        const ids = Array.isArray(c.allowances) ? c.allowances : P.suggestedAllowances(t, c.entries);
+        return all.filter(a => ids.includes(a.id));
+    }
+    /** Lohn der Person: Jahreslohn beim Pensum, Zulagen (anteilig), Total und Monatslohn. */
+    function salaryOf(c, pl) {
+        const t = tplOf(c);
+        if (!pl || !pl.salary) return null;
+        const p = pensumOf(c, t);
+        const base = pl.salary * p / 100;
+        const allowances = allowancesOf(c, t).map(a => ({ label: a.label, annual: a.annual, amount: a.annual * p / 100 }));
+        const total = base + allowances.reduce((x, a) => x + a.amount, 0);
+        return { pensum: p, full: pl.salary, base, allowances, total, payments: t.payments, monthly: total / t.payments, monthlyOther: total / (t.payments === 12 ? 13 : 12) };
+    }
+    /** Angaben von Claude zur Korrektur – «Ausbildung passt» nur für die Funktion, die Claude beurteilt hat. */
+    function flagsFor(c) {
+        if (!c.aiFlags) return null;
+        const f = Object.assign({}, c.aiFlags);
+        if (f.forFunction !== c.templateId) delete f.qualificationMatches;
+        return f;
+    }
+    /** Vorgeschlagene Korrekturen, die noch nicht übernommen oder ignoriert wurden. */
+    function correctionsFor(c) {
+        return P.suggestCorrections(c.entries, tplOf(c), settings.classAdjustments, flagsFor(c))
+            .filter(x => x.id !== c.adjustmentId && !(c.dismissedAdj || []).includes(x.id));
+    }
+    /** Fingerabdruck der Auswertung: ändert sich etwas nach der Prüfung, muss neu geprüft werden. */
+    function reviewSnapshot(c) {
+        const r = computeFor(c), pl = placementFor(c, r), sal = salaryOf(c, pl);
+        return JSON.stringify([c.templateId, c.baseTemplateId || '', Math.round(r.creditedYears * 100), pl ? [pl.cls, pl.stage] : null, c.adjustmentId || '', sal ? Math.round(sal.total) : null]);
+    }
+    function reviewState(c) {
+        const rv = c.review;
+        if (!rv || !rv.checkedBy) return { checked: false, approved: false, stale: false };
+        const stale = rv.snapshot !== reviewSnapshot(c);
+        return { checked: !stale, approved: !stale && (!settings.fourEyes || !!rv.approvedBy), stale, needsApproval: !stale && settings.fourEyes && !rv.approvedBy };
+    }
+    const fmtWhen = iso => iso ? new Date(iso).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' }) : '';
+
     /** Lohneinreihung als Text, z. B. «Lohnklasse 12, Stufe 6 · Jahreslohn CHF 95'000.00 bei 100 % · …». */
     function placementText(c, pl) {
         if (!pl) return '';
         const t = tplOf(c);
         const parts = [pl.fixed ? 'Fixer Lohn gemäss Funktion' : `Lohnklasse ${pl.cls}, Stufe ${pl.stage}`];
-        if (pl.salary) {
-            const p = pensumOf(c, t);
-            const year = pl.salary * p / 100;
-            const other = t.payments === 12 ? 13 : 12;
-            parts.push(`Jahreslohn ${chf(pl.salary)} bei 100 %`);
-            if (t.lessonsFull && p !== 100) parts.push(`${chf(year)} bei ${fmtNum(c.newLessons ?? t.lessonsFull)} von ${fmtNum(t.lessonsFull)} Lektionen (${fmtNum(p)} %)`);
+        const sal = salaryOf(c, pl);
+        if (sal) {
+            const p = sal.pensum, other = t.payments === 12 ? 13 : 12;
+            parts.push(`Jahreslohn ${chf(sal.full)} bei 100 %`);
+            if (t.lessonsFull && p !== 100) parts.push(`${chf(sal.base)} bei ${fmtNum(c.newLessons ?? t.lessonsFull)} von ${fmtNum(t.lessonsFull)} Lektionen (${fmtNum(p)} %)`);
             else if (t.lessonsFull) parts[parts.length - 1] += ` (${fmtNum(t.lessonsFull)} Lektionen)`;
-            else if (p !== 100) parts.push(`${chf(year)} bei ${fmtNum(p)} %`);
-            parts.push(`Monatslohn ${chf(year / t.payments)} (${t.payments} Auszahlungen; bei ${other}: ${chf(year / other)})`);
+            else if (p !== 100) parts.push(`${chf(sal.base)} bei ${fmtNum(p)} %`);
+            sal.allowances.forEach(a => parts.push(`+ ${a.label} ${chf(a.amount)}`));
+            if (sal.allowances.length) parts.push(`Total ${chf(sal.total)} pro Jahr`);
+            parts.push(`Monatslohn ${chf(sal.monthly)} (${t.payments} Auszahlungen; bei ${other}: ${chf(sal.monthlyOther)})`);
         }
         if (t.lessonsFull && pl.lesson) parts.push(`pro Lektion ${chfExact(pl.lesson)}`);
         else if (pl.hour) parts.push(`pro Stunde ${chfExact(pl.hour)}`);
@@ -291,6 +345,7 @@
                 ));
                 c.entries = res.entries;
                 c.hinweise = res.hinweise;
+                c.aiFlags = res.flags || null;
                 applySuggestion(c, res);
                 if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
                 if (res.birth && !c.birthEdited) c.birth = res.birth;
@@ -302,6 +357,7 @@
             }
         }
         c.entries = P.extractEntries(c.text, settings);
+        c.aiFlags = null;
         applySuggestion(c, null);
         if (!c.birthEdited) c.birth = P.extractBirth(c.text) || c.birth || '';
         c.source = 'regeln';
@@ -316,8 +372,13 @@
             birthEdited: false,
             text,
             pdfBase64: pdfBase64 || null,
-            templateId: defaultTemplateId === AUTO ? settings.templates[0].id : defaultTemplateId,
+            templateId: defaultTemplateId === AUTO || isPosChoice(defaultTemplateId) ? settings.templates[0].id : defaultTemplateId,
             autoTemplate: defaultTemplateId === AUTO, // Funktion aus dem Lebenslauf vorschlagen
+            positionId: '',
+            status: 'neu',
+            review: null,          // {checkedBy, checkedAt, approvedBy, approvedAt, snapshot}
+            allowances: null,      // gewählte Zulagen (null = Vorschlag aus der Ausbildung)
+            dismissedAdj: [],      // ignorierte Korrekturvorschläge
             suggestion: null,
             baseTemplateId: '',
             adjustmentId: '',
@@ -382,6 +443,7 @@
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
                     if (src.file) { c.file = src.file; c.fileName = src.file.name; }
+                    if (isPosChoice(defaultTemplateId)) { const pos = positionOf(defaultTemplateId.slice(4)); if (pos) applyPosition(c, pos); }
                     batch.push(c);
                 } catch (e) {
                     errors.push(src.name + ': ' + e.message);
@@ -488,6 +550,23 @@
             note: pl ? '' : t.note,
             suggestionText: c.suggestion && c.suggestion.id === c.templateId ? 'aus dem Lebenslauf vorgeschlagen' + (c.suggestion.reason ? ': ' + c.suggestion.reason : '') + (c.suggestion.source === 'ki' ? ' (Claude)' : ' (Stichwörter)') : '',
             baseText: t.baseName ? `Grundfunktion «${t.baseName}» +${t.baseDelta}` + (t.classCap ? `, max. LK ${t.classCap}` : '') : '',
+            statusText: (P.STATUSES.find(x => x.id === (c.status || 'neu')) || {}).name || '',
+            positionText: c.positionId && positionOf(c.positionId) ? positionOf(c.positionId).title : '',
+            placement: pl,
+            salary: salaryOf(c, pl),
+            adjustmentText: adjustmentOf(c) ? adjustmentOf(c).label : '',
+            openCorrections: correctionsFor(c).map(x => `${x.label} (${x.reason})`),
+            outlook: pl && !pl.fixed ? P.salaryOutlook(r.creditedYears, t, adjustmentOf(c), settings.salaryTables, undefined, 10).map(x => {
+                const sal = salaryOf(c, pl), p = pensumOf(c, t), allow = allowancesOf(c, t).reduce((a, z) => a + z.annual, 0);
+                return Object.assign(x, { amount: x.salary ? (x.salary + allow) * p / 100 : null, monthly: x.salary ? (x.salary + allow) * p / 100 / t.payments : null, sal });
+            }) : [],
+            pensumText: t.lessonsFull ? `${fmtNum(c.newLessons ?? t.lessonsFull)} von ${fmtNum(t.lessonsFull)} Lektionen (${fmtNum(pensumOf(c, t))} %)` : `${fmtNum(pensumOf(c, t))} %`,
+            review: (st => ({
+                checked: st.checked ? `${c.review.checkedBy}, ${fmtWhen(c.review.checkedAt)}` : st.stale ? `nach Prüfung durch ${c.review.checkedBy} geändert – nicht geprüft` : '',
+                approved: st.checked && c.review.approvedBy ? `${c.review.approvedBy}, ${fmtWhen(c.review.approvedAt)}` : '',
+                fourEyes: !!settings.fourEyes
+            }))(reviewState(c)),
+            chf, fmtNum,
             timeline: timelineHtml(c, r)
         };
     }
@@ -503,10 +582,14 @@
 
     function render() {
         // Vorlage gibt es nicht mehr (z. B. nach dem Einlesen eines Reglements): automatisch vorschlagen, falls Stichwörter vorhanden
-        if (defaultTemplateId !== AUTO && !settings.templates.some(t => t.id === defaultTemplateId)) {
+        if (isPosChoice(defaultTemplateId) && !(positionOf(defaultTemplateId.slice(4)) || {}).status) defaultTemplateId = AUTO;
+        if (defaultTemplateId !== AUTO && !isPosChoice(defaultTemplateId) && !settings.templates.some(t => t.id === defaultTemplateId)) {
             defaultTemplateId = settings.templates.some(t => t.keywords && t.keywords.length) ? AUTO : settings.templates[0]?.id || '';
         }
-        $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>` + tplOptions(defaultTemplateId);
+        const openPos = (settings.positions || []).filter(p => p.status === 'offen');
+        $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>`
+            + (openPos.length ? `<optgroup label="Offene Stellen">${openPos.map(p => `<option value="pos:${esc(p.id)}"${defaultTemplateId === 'pos:' + p.id ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</optgroup>` : '')
+            + `<optgroup label="Funktionen">${tplOptions(defaultTemplateId)}</optgroup>`;
         $('#privacy').innerHTML = aiActive()
             ? `${icon('sparkles')} KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
             : ai.enabled
@@ -518,6 +601,7 @@
         renderOverview();
         renderDetail();
         if (view === 'applicants') { renderApplicants(); renderCv(); }
+        if (view === 'positions') renderPositions();
         scheduleSave();
     }
 
@@ -529,10 +613,12 @@
 
     /** Wechselt zwischen Startseite und «Bewerbende» (#bewerbende); die Personenansicht wandert mit. */
     function showView() {
-        view = location.hash === '#bewerbende' ? 'applicants' : 'main';
+        view = location.hash === '#bewerbende' ? 'applicants' : location.hash === '#stellen' ? 'positions' : 'main';
         $('#viewMain').hidden = view !== 'main';
         $('#viewApplicants').hidden = view !== 'applicants';
+        $('#viewPositions').hidden = view !== 'positions';
         $('#openApplicants').classList.toggle('active', view === 'applicants');
+        $('#openPositions').classList.toggle('active', view === 'positions');
         const target = view === 'applicants' ? $('#applicantDetail') : $('#viewMain');
         if (detail.parentNode !== target) target.appendChild(detail);
         if (view === 'applicants') { cvShownId = null; if (!candidates.some(c => c.id === selectedId)) selectedId = null; }
@@ -540,37 +626,175 @@
         window.scrollTo(0, 0);
     }
 
+    // --- Seite «Offene Stellen» ---
+    let posFilter = 'offen', editingPos = null;
+    const POS_STATUS = { offen: 'offen', besetzt: 'besetzt', geschlossen: 'geschlossen' };
+    function renderPositions() {
+        const all = settings.positions || [];
+        const list = all.filter(p => posFilter === 'alle' || p.status === 'offen');
+        const byPos = id => candidates.filter(c => c.positionId === id);
+        $('#positionsInfo').textContent = `${all.filter(p => p.status === 'offen').length} offen, ${all.length} insgesamt. Bewerbende ordnest du beim Hochladen (Auswahl «Stelle / Vorlage») oder bei der Person einer Stelle zu.`;
+        document.querySelectorAll('[data-posfilter]').forEach(b => b.classList.toggle('active', b.dataset.posfilter === posFilter));
+        $('#positionsList').innerHTML = list.length ? list.map(p => {
+            const t = settings.templates.find(x => x.id === p.templateId);
+            const e = t ? P.effectiveTemplate(t, settings.templates) : null;
+            const cands = byPos(p.id);
+            const counts = P.STATUSES.map(st => [st, cands.filter(c => (c.status || 'neu') === st.id).length]).filter(([, n]) => n);
+            return `<article class="pos-card pos-${p.status}">
+                <header><h3>${esc(p.title)}</h3><span class="badge ${p.status === 'offen' ? 'badge-ok' : 'badge-off'}">${esc(POS_STATUS[p.status])}</span></header>
+                <p class="pos-fn">${t ? esc(t.name) : '<span class="warn">keine Funktion gewählt</span>'}${e && e.classMin ? ` · LK ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}` : e && e.fixedAnnual ? ' · fixer Lohn' : ''}</p>
+                <dl class="pos-facts">
+                    <div><dt>Pensum</dt><dd>${p.lessons ? `${fmtNum(p.lessons)} Lektionen` : `${p.pensum} %`}</dd></div>
+                    <div><dt>Antritt</dt><dd>${p.start ? fmtDay(p.start) : '–'}</dd></div>
+                    <div><dt>Bewerbende</dt><dd>${cands.length}</dd></div>
+                </dl>
+                ${counts.length ? `<div class="pos-status">${counts.map(([st, n]) => `<span class="status-pill st-${st.id}">${esc(st.name)} ${n}</span>`).join('')}</div>` : ''}
+                ${p.note ? `<p class="hint">${esc(p.note)}</p>` : ''}
+                <footer class="row-gap">
+                    <button class="btn btn-primary btn-sm" type="button" data-posapplicants="${esc(p.id)}">${icon('users')} Bewerbende vergleichen</button>
+                    <button class="btn btn-ghost btn-sm" type="button" data-editpos="${esc(p.id)}">${icon('pencil')} Bearbeiten</button>
+                </footer>
+            </article>`;
+        }).join('') : `<p class="empty">${all.length ? 'Keine offenen Stellen. Unter «Alle» siehst du besetzte und geschlossene.' : 'Noch keine Stellen erfasst. Mit «Neue Stelle» legst du die erste an.'}</p>`;
+    }
+    function openPositionDialog(pos) {
+        editingPos = pos;
+        $('#positionDialogTitle').textContent = pos ? 'Stelle bearbeiten' : 'Neue Stelle';
+        $('#posTemplate').innerHTML = settings.templates.map(t => `<option value="${esc(t.id)}"${pos && pos.templateId === t.id ? ' selected' : ''}>${esc(t.name)}</option>`).join('');
+        $('#posTitle').value = pos ? pos.title : '';
+        $('#posPensum').value = pos ? pos.pensum : 100;
+        $('#posLessons').value = pos && pos.lessons ? pos.lessons : '';
+        $('#posStart').value = pos && pos.start ? pos.start : '';
+        $('#posStatus').value = pos ? pos.status : 'offen';
+        $('#posNote').value = pos ? pos.note : '';
+        $('#deletePosition').hidden = !pos;
+        updatePosLessons();
+        $('#positionDialog').showModal();
+        $('#posTitle').focus();
+    }
+    function updatePosLessons() {
+        const t = settings.templates.find(x => x.id === $('#posTemplate').value);
+        $('#posLessonsField').hidden = !(t && t.lessonsFull);
+    }
+    /** Stellen gehören zu den Einstellungen und werden für alle gespeichert. */
+    function savePositions() {
+        saveSettings();
+        pushShared().catch(err => setStatus('Stelle nur in diesem Browser gespeichert: ' + err.message, true));
+        render();
+    }
+    $('#addPosition').addEventListener('click', () => openPositionDialog(null));
+    $('#posTemplate').addEventListener('change', updatePosLessons);
+    $('#positionsList').addEventListener('click', e => {
+        const ed = e.target.closest('[data-editpos]');
+        if (ed) { openPositionDialog(positionOf(ed.dataset.editpos)); return; }
+        const ap = e.target.closest('[data-posapplicants]');
+        if (ap) { applicantPos = ap.dataset.posapplicants; applicantStatus = 'alle'; location.hash = '#bewerbende'; }
+    });
+    document.querySelectorAll('[data-posfilter]').forEach(b => b.addEventListener('click', () => { posFilter = b.dataset.posfilter; renderPositions(); }));
+    $('#deletePosition').addEventListener('click', () => {
+        if (!editingPos || !confirm(`Stelle «${editingPos.title}» löschen? Die Bewerbenden bleiben erhalten, sind aber keiner Stelle mehr zugeordnet.`)) return;
+        settings.positions = settings.positions.filter(p => p !== editingPos);
+        candidates.forEach(c => { if (c.positionId === editingPos.id) c.positionId = ''; });
+        $('#positionDialog').close('deleted');
+        savePositions();
+    });
+    $('#positionDialog').addEventListener('close', () => {
+        if ($('#positionDialog').returnValue !== 'save') return;
+        const title = $('#posTitle').value.trim();
+        if (!title) return;
+        const data = P.normalizeSettings({ categories: [], templates: [], positions: [{
+            id: editingPos ? editingPos.id : undefined, title, templateId: $('#posTemplate').value,
+            pensum: +$('#posPensum').value || 100, lessons: $('#posLessons').closest('label').hidden ? null : +$('#posLessons').value || null,
+            start: $('#posStart').value, status: $('#posStatus').value, note: $('#posNote').value.trim()
+        }] }).positions[0];
+        settings.positions = settings.positions || [];
+        if (editingPos) settings.positions[settings.positions.indexOf(editingPos)] = data;
+        else settings.positions.unshift(data);
+        savePositions();
+    });
+
     /** Wie lange eine Person noch aufbewahrt wird (Tage bis zur Löschung). */
     function retentionBadge(c) {
         if (!savedJson.has(c.id)) return `<span class="badge" title="Nur in diesem Browser – nach dem Neuladen weg">nicht gespeichert</span>`;
-        if (!store.keepDays) return `<span class="badge badge-info" title="Wird nicht automatisch gelöscht">unbefristet</span>`;
-        const until = (c.savedAt ? Date.parse(c.savedAt) : Date.now()) + store.keepDays * 864e5;
+        const own = (store.keepByStatus || {})[c.status || 'neu'];
+        const days = own !== undefined && own > 0 ? own : store.keepDays;
+        if (!days) return `<span class="badge badge-info" title="Wird nicht automatisch gelöscht">unbefristet</span>`;
+        const until = (c.savedAt ? Date.parse(c.savedAt) : Date.now()) + days * 864e5;
         const left = Math.ceil((until - Date.now()) / 864e5);
-        const title = `Wird am ${new Date(until).toLocaleDateString('de-CH')} endgültig gelöscht (${store.keepDays} Tage nach der letzten Änderung)`;
+        const title = `Wird am ${new Date(until).toLocaleDateString('de-CH')} endgültig gelöscht (${days} Tage nach der letzten Änderung${own !== undefined && own > 0 ? `, Frist für Status «${(P.STATUSES.find(x => x.id === (c.status || 'neu')) || {}).name}»` : ''})`;
         return `<span class="badge ${left <= 14 ? '' : 'badge-info'}" title="${esc(title)}">${icon(left <= 14 ? 'alert' : 'clock')} ${left <= 0 ? 'wird gelöscht' : `noch ${left} Tag${left === 1 ? '' : 'e'}`}</span>`;
+    }
+
+    let applicantStatus = 'alle', applicantPos = '';
+    const statusName = id => (P.STATUSES.find(x => x.id === (id || 'neu')) || {}).name || '';
+    const statusPill = c => `<span class="status-pill st-${esc(c.status || 'neu')}">${esc(statusName(c.status))}</span>`;
+    function reviewPill(c) {
+        const st = reviewState(c);
+        if (st.stale) return `<span class="badge" title="Nach der Prüfung geändert">${icon('alert')} geändert</span>`;
+        if (st.needsApproval) return `<span class="badge badge-info" title="Geprüft von ${esc(c.review.checkedBy)}, Freigabe ausstehend">${icon('check')} geprüft</span>`;
+        if (st.approved) return `<span class="badge badge-ok" title="${esc(c.review.checkedBy)}${c.review.approvedBy ? ' / ' + esc(c.review.approvedBy) : ''}">${icon('check')} ${settings.fourEyes ? 'freigegeben' : 'geprüft'}</span>`;
+        return '';
     }
 
     function renderApplicants() {
         const terms = $('#applicantSearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        const hay = c => [c.name, tplOf(c).name, c.fileName, c.hinweise, c.birth, ...(c.entries || []).map(e => e.title + ' ' + e.details), c.text].join(' ').toLowerCase();
-        const list = candidates.slice().reverse().filter(c => terms.every(t => hay(c).includes(t)));
-        $('#applicantsInfo').innerHTML = (terms.length ? `${list.length} von ${candidates.length} Bewerbenden gefunden.` : `${candidates.length} Bewerbende, neueste zuerst.`)
+        const hay = c => [c.name, tplOf(c).name, c.fileName, c.hinweise, c.birth, statusName(c.status), c.positionId && positionOf(c.positionId) ? positionOf(c.positionId).title : '', ...(c.entries || []).map(e => e.title + ' ' + e.details), c.text].join(' ').toLowerCase();
+        const byPos = c => !applicantPos || (applicantPos === '__none' ? !c.positionId : c.positionId === applicantPos);
+        const base = candidates.slice().reverse().filter(c => byPos(c) && terms.every(t => hay(c).includes(t)));
+        const list = base.filter(c => applicantStatus === 'alle' || (c.status || 'neu') === applicantStatus);
+        // Filter: Status mit Anzahl, Stelle
+        $('#statusFilter').innerHTML = [{ id: 'alle', name: 'Alle' }].concat(P.STATUSES).map(st => {
+            const n = st.id === 'alle' ? base.length : base.filter(c => (c.status || 'neu') === st.id).length;
+            return `<button type="button" class="seg-btn${applicantStatus === st.id ? ' active' : ''}" data-stfilter="${st.id}">${esc(st.name)} <span class="seg-count">${n}</span></button>`;
+        }).join('');
+        const positions = settings.positions || [];
+        if (applicantPos && applicantPos !== '__none' && !positionOf(applicantPos)) applicantPos = '';
+        $('#positionFilter').innerHTML = `<option value="">alle Stellen</option>${positions.map(p => `<option value="${esc(p.id)}"${p.id === applicantPos ? ' selected' : ''}>${esc(p.title)}${p.status !== 'offen' ? ` (${p.status})` : ''}</option>`).join('')}<option value="__none"${applicantPos === '__none' ? ' selected' : ''}>ohne Stelle</option>`;
+        renderCompare(applicantPos && applicantPos !== '__none' ? list : []);
+        const filtered = terms.length || applicantPos || applicantStatus !== 'alle';
+        $('#applicantsInfo').innerHTML = (filtered ? `${list.length} von ${candidates.length} Bewerbenden.` : `${candidates.length} Bewerbende, neueste zuerst.`)
             + (storeActive() ? store.keepDays ? ` Gespeicherte Personen werden ${store.keepDays} Tage nach der letzten Änderung samt Lebenslauf gelöscht.` : ''
                 : ` <span class="warn">${icon('alert')} Personen werden nicht gespeichert: ${esc(storeReason())}</span>`);
         $('#applicantsBody').innerHTML = list.length ? list.map(c => {
-            if (c.loading) return `<tr data-select="${c.id}"><td><strong>${esc(c.name)}</strong></td><td colspan="6" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td></tr>`;
+            if (c.loading) return `<tr data-select="${c.id}"><td><strong>${esc(c.name)}</strong></td><td colspan="7" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td></tr>`;
             const r = computeFor(c), pl = placementFor(c, r), n = overrideCount(c);
+            const dup = P.findDuplicates(candidates).has(c.id);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
-                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ` <span class="mini-ai" title="ausgewertet mit Claude">${icon('sparkles', 'ausgewertet mit Claude')}</span>` : ''}${n ? ` <span class="badge badge-manual">${icon('pencil')} ${n} manuell</span>` : ''}
+                <td>${statusPill(c)} ${reviewPill(c)}</td>
+                <td><strong>${esc(c.name)}</strong>${dup ? ` <span class="badge" title="Mögliche Doppelbewerbung">${icon('alert')} doppelt?</span>` : ''}${c.source === 'ki' ? ` <span class="mini-ai" title="ausgewertet mit Claude">${icon('sparkles', 'ausgewertet mit Claude')}</span>` : ''}${n ? ` <span class="badge badge-manual">${icon('pencil')} ${n} manuell</span>` : ''}
                     ${c.hasFile || c.file ? `<div class="details">${icon('file')} ${esc(c.fileName || 'Lebenslauf')}</div>` : ''}</td>
-                <td>${esc(tplOf(c).name)}</td>
+                <td>${esc(tplOf(c).name)}${c.positionId && positionOf(c.positionId) ? `<div class="details">${icon('briefcase')} ${esc(positionOf(c.positionId).title)}</div>` : ''}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong> J.</td>
                 <td class="num">${pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : '–'}</td>
                 <td>${fmtDate(c.createdAt)}</td>
                 <td>${retentionBadge(c)}</td>
                 <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Löschen" aria-label="Löschen">${icon('x')}</button></td>
             </tr>`;
-        }).join('') : `<tr><td colspan="7" class="empty">${candidates.length ? 'Keine Bewerbenden gefunden.' : 'Noch keine Bewerbenden ausgewertet.'}</td></tr>`;
+        }).join('') : `<tr><td colspan="8" class="empty">${candidates.length ? 'Keine Bewerbenden gefunden.' : 'Noch keine Bewerbenden ausgewertet.'}</td></tr>`;
+    }
+
+    /** Vergleich der Bewerbenden einer Stelle nebeneinander. */
+    function renderCompare(list) {
+        const ready = list.filter(c => !c.loading);
+        $('#compareCard').hidden = !ready.length;
+        if (!ready.length) return;
+        const pos = positionOf(applicantPos);
+        const cols = ready.map(c => { const r = computeFor(c), pl = placementFor(c, r); return { c, r, pl, sal: salaryOf(c, pl), corr: correctionsFor(c) }; })
+            .sort((a, b) => b.r.creditedYears - a.r.creditedYears);
+        $('#compareTitle').textContent = `Vergleich: ${pos ? pos.title : ''} (${cols.length})`;
+        const row = (label, f) => `<tr><th>${label}</th>${cols.map(x => `<td>${f(x)}</td>`).join('')}</tr>`;
+        $('#compareTable').innerHTML = `<thead><tr><th></th>${cols.map(x => `<th><button type="button" class="link-btn" data-select="${x.c.id}">${esc(x.c.name)}</button></th>`).join('')}</tr></thead><tbody>
+            ${row('Status', x => statusPill(x.c) + ' ' + reviewPill(x.c))}
+            ${row('Funktion', x => esc(tplOf(x.c).name))}
+            ${row('Anrechenbare Jahre', x => `<b>${fmt(x.r.creditedYears)} J.</b>`)}
+            ${row('davon im Zielberuf', x => `${fmt(x.r.targetYears)} J.`)}
+            ${row('Berufserfahrung total', x => `${fmt(x.r.totalYears)} J.`)}
+            ${row('Einreihung', x => x.pl ? x.pl.fixed ? 'fixer Lohn' : `LK ${x.pl.cls}, Stufe ${x.pl.stage}` : '–')}
+            ${row('Korrektur', x => (adjustmentOf(x.c) ? esc(adjustmentOf(x.c).label) : '–') + (x.corr.length ? `<div class="details">${icon('lightbulb')} Vorschlag: ${esc(x.corr.map(k => k.label).join(', '))}</div>` : ''))}
+            ${row(`Jahreslohn${pos ? ` (${pos.lessons ? fmtNum(pos.lessons) + ' Lekt.' : pos.pensum + ' %'})` : ''}`, x => x.sal ? `<b>${chf(x.sal.total)}</b>` : '–')}
+            ${row('Monatslohn', x => x.sal ? chf(x.sal.monthly) : '–')}
+            ${row('Zulagen', x => x.sal && x.sal.allowances.length ? esc(x.sal.allowances.map(a => a.label).join(', ')) : '–')}
+        </tbody>`;
     }
 
     /** Datei des Lebenslaufs als Objekt-URL (aus dem Speicher oder aus der Datenbank). */
@@ -642,7 +866,8 @@
     let store = { available: false, enabled: false, keepDays: 0, problem: '', error: '' };
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
-        'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName'];
+        'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName',
+        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -664,7 +889,7 @@
         try {
             const res = await fetch(CANDIDATES_URL + '?action=status', { cache: 'no-store' });
             const d = res.ok ? await res.json() : null;
-            store = d ? Object.assign(store, { available: true, enabled: !!d.enabled, keepDays: d.keepDays || 0, maxFileMb: d.maxFileMb || 12, problem: d.problem || '' }) : Object.assign(store, { available: false, enabled: false });
+            store = d ? Object.assign(store, { available: true, enabled: !!d.enabled, keepDays: d.keepDays || 0, keepByStatus: d.keepByStatus || {}, maxFileMb: d.maxFileMb || 12, problem: d.problem || '' }) : Object.assign(store, { available: false, enabled: false });
         } catch (e) {
             store.available = store.enabled = false;
         }
@@ -679,6 +904,7 @@
             for (const c of list || []) {
                 if (candidates.some(x => x.id === c.id)) continue;
                 const cand = Object.assign(newCandidate(c.name || 'Unbenannt', c.text || '', null), c, { loading: false, pdfBase64: null });
+                if (!cand.status) cand.status = 'neu';
                 if (!Array.isArray(cand.entries)) cand.entries = [];
                 candidates.push(cand);
                 savedJson.set(cand.id, persistable(cand));
@@ -764,6 +990,64 @@
         }).join('');
     }
 
+    /** Hinweis auf mögliche Doppelbewerbung. */
+    function duplicateHtml(c) {
+        const others = (P.findDuplicates(candidates).get(c.id) || []).map(id => candidates.find(x => x.id === id)).filter(Boolean);
+        if (!others.length) return '';
+        return `<div class="notice">${icon('alert')} <b>Mögliche Doppelbewerbung:</b> ${others.map(o => `<button type="button" class="link-btn" data-opendup="${esc(o.id)}">${esc(o.name)}</button> (${fmtDate(o.createdAt)}${o.positionId && positionOf(o.positionId) ? ', ' + esc(positionOf(o.positionId).title) : ''})`).join(', ')}</div>`;
+    }
+    /** Vorgeschlagene Korrekturen der Lohnklasse mit «Übernehmen» / «Ignorieren». */
+    function correctionsHtml(c) {
+        const list = correctionsFor(c);
+        if (!list.length) return '';
+        return list.map(x => `<div class="suggestion suggestion-adj">${icon('lightbulb')} <b>Korrektur vorgeschlagen: ${esc(x.label)}</b> – ${esc(x.reason)}.
+            <span class="row-gap inline-actions"><button type="button" class="btn btn-primary btn-sm" data-applyadj="${esc(x.id)}">Übernehmen</button><button type="button" class="btn btn-ghost btn-sm" data-dismissadj="${esc(x.id)}">Ignorieren</button></span></div>`).join('');
+    }
+    /** Lohnentwicklung der nächsten Jahre (Stufen- und Klassenaufstieg). */
+    function outlookHtml(c, r) {
+        const t = tplOf(c);
+        if (t.fixedAnnual) return '';
+        const rows = P.salaryOutlook(r.creditedYears, t, adjustmentOf(c), settings.salaryTables, undefined, 10);
+        if (!rows.length) return '';
+        const p = pensumOf(c, t);
+        const allow = allowancesOf(c, t).reduce((x, a) => x + a.annual, 0);
+        return `<details class="outlook"><summary>Lohnentwicklung der nächsten 10 Jahre</summary><div class="table-scroll"><table class="table outlook-table">
+            <thead><tr><th>Jahr</th><th class="num">Erfahrungsjahre</th><th class="num">Lohnklasse</th><th class="num">Stufe</th><th class="num">Jahreslohn${p !== 100 ? ` (${fmtNum(p)} %)` : ''}</th><th class="num">Monatslohn</th></tr></thead>
+            <tbody>${rows.map((x, i) => {
+                const y = x.salary ? (x.salary + allow) * p / 100 : null;
+                const up = i > 0 && x.cls !== rows[i - 1].cls;
+                return `<tr${up ? ' class="up"' : ''}><td>${x.year}</td><td class="num">${x.years}</td><td class="num">${x.cls}${up ? ' ↑' : ''}</td><td class="num">${x.stage}</td><td class="num">${y ? chf(y) : '–'}</td><td class="num">${y ? chf(y / t.payments) : '–'}</td></tr>`;
+            }).join('')}</tbody></table></div>
+            <p class="hint">Stufenaufstieg jeweils auf den 1. Januar, Klassenaufstieg nach ${(t.classUpYears || []).join(' und ') || '–'} Jahren; gerechnet mit der jeweils gültigen, sonst der neuesten Gehaltstabelle (ohne Teuerung).</p></details>`;
+    }
+    /** Prüfung und Freigabe (Vier-Augen-Prinzip). */
+    function reviewHtml(c) {
+        const rv = c.review, st = reviewState(c);
+        const who = x => `${esc(x.by)} am ${esc(fmtWhen(x.at))}`;
+        let body;
+        if (!rv || !rv.checkedBy) {
+            body = `<span class="review-state">${icon('clock')} Noch nicht geprüft</span><button type="button" class="btn btn-primary btn-sm" data-review="check">${icon('check')} Als geprüft markieren</button>`;
+        } else if (st.stale) {
+            body = `<span class="review-state warn">${icon('alert')} Nach der Prüfung durch ${esc(rv.checkedBy)} geändert – bitte erneut prüfen</span><button type="button" class="btn btn-primary btn-sm" data-review="check">${icon('check')} Erneut prüfen</button>`;
+        } else {
+            body = `<span class="review-state ok">${icon('check')} Geprüft von ${who({ by: rv.checkedBy, at: rv.checkedAt })}</span>`
+                + (settings.fourEyes ? rv.approvedBy ? `<span class="review-state ok">${icon('check')} Freigegeben von ${who({ by: rv.approvedBy, at: rv.approvedAt })}</span>`
+                    : `<button type="button" class="btn btn-primary btn-sm" data-review="approve">${icon('users')} Freigeben (zweite Person)</button>` : '')
+                + `<button type="button" class="btn btn-ghost btn-sm" data-review="reset">Zurücksetzen</button>`;
+        }
+        return `<div class="review-bar"><span class="label">Prüfung${settings.fourEyes ? ' (Vier-Augen-Prinzip)' : ''}</span>${body}</div>`;
+    }
+    /** Eigener Name für Prüfung/Freigabe (einmal fragen, im Browser merken). */
+    function currentUser() {
+        if (!ai.userName) {
+            const n = (prompt('Dein Name für die Prüfung (wird in diesem Browser gespeichert, änderbar unter Einstellungen → Zugang):') || '').trim();
+            if (!n) return '';
+            ai.userName = n;
+            storageSet(AI_KEY, JSON.stringify(ai));
+        }
+        return ai.userName;
+    }
+
     /** Vorgeschlagene Funktion mit Begründung und Alternativen (anklickbar). */
     function suggestionHtml(c) {
         const sg = c.suggestion;
@@ -819,8 +1103,10 @@
             <div class="detail-head">
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
                 <div class="head-fields">
+                    <label class="field"><span>Status</span><select data-cf="status" class="status-select st-${esc(c.status || 'neu')}">${P.STATUSES.map(st => `<option value="${st.id}"${(c.status || 'neu') === st.id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
-                    <label class="field"><span>Stelle / Vorlage</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
+                    <label class="field"><span>Offene Stelle</span><select data-cf="positionId"><option value="">keine</option>${(settings.positions || []).filter(p => p.status === 'offen' || p.id === c.positionId).map(p => `<option value="${esc(p.id)}"${p.id === c.positionId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</select></label>
+                    <label class="field"><span>Funktion</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
                     ${rawTplOf(c).baseTemplateId ? `<label class="field"><span>Grundfunktion</span><select data-cf="baseTemplateId">${settings.templates.filter(x => x.id !== t.id && x.classMin && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === (c.baseTemplateId || rawTplOf(c).baseTemplateId) ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
                     ${t.classMin || t.fixedAnnual ? `${t.lessonsFull
                         ? `<label class="field"><span>Lektionen neue Stelle</span><div class="suffix"><input type="number" min="0.5" max="${esc(t.lessonsFull)}" step="0.5" data-cf="newLessons" value="${esc(c.newLessons ?? t.lessonsFull)}"><em>von ${esc(fmtNum(t.lessonsFull))}</em></div></label>`
@@ -831,8 +1117,10 @@
             <p class="source">${c.source === 'ki' ? `<span class="pill pill-ai">${icon('sparkles')} ausgewertet mit Claude</span>` : '<span class="pill">ausgewertet mit Regeln</span>'}
                 ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
+            ${duplicateHtml(c)}
             ${suggestionHtml(c)}
-            ${c.hinweise ? `<div class="notice"><b>Hinweis von Claude:</b> ${esc(c.hinweise)}</div>` : ''}
+            ${correctionsHtml(c)}
+            ${c.hinweise ? `<div class="notice"><b>Hinweis:</b> ${esc(c.hinweise)}</div>` : ''}
             <div class="stats">
                 <div class="stat"><div class="label">Berufserfahrung total</div><div class="value">${fmt(r.totalYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.totalYears)}</div></div>
                 <div class="stat"><div class="label">davon als ${esc(catName(t.target))}</div><div class="value">${fmt(r.targetYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.targetYears)}</div></div>
@@ -841,7 +1129,9 @@
             </div>
             ${!placementFor(c, r) && t.note ? `<div class="notice"><b>Hinweis zur Einreihung:</b> ${esc(t.note)}</div>` : ''}
             ${!placementFor(c, r) ? `<div class="notice"><b>Keine Lohneinreihung:</b> Die Vorlage «${esc(t.name)}» hat keine Lohnklassen. Eine Vorlage des Einreihungsplans wählen oder bei dieser Vorlage «Lohnklasse von/bis» eintragen. <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Vorlage bearbeiten</button></div>` : ''}
-            ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div></div>` : '')(placementFor(c, r))}
+            ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div>
+                ${(t.allowances || []).length ? `<div class="allow-row"><span class="label">Zulagen</span>${t.allowances.map(a => `<label class="check"><input type="checkbox" data-allow="${esc(a.id)}" ${allowancesOf(c, t).includes(a) ? 'checked' : ''}> ${esc(a.label)} (${chf(a.annual)}/Jahr bei 100 %)</label>`).join('')}${c.allowances === null && allowancesOf(c, t).length ? '<span class="hint">aufgrund der Ausbildung vorgeschlagen</span>' : ''}</div>` : ''}
+                ${outlookHtml(c, r)}</div>` : '')(placementFor(c, r))}
             <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
             ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
@@ -851,10 +1141,12 @@
                 </tr></thead>
                 <tbody>${rows}</tbody>
             </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>'}
+            ${reviewHtml(c)}
             <div class="detail-actions">
                 <button class="btn btn-ghost btn-sm" type="button" data-action="add">+ Stelle hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
-                <button class="btn btn-primary btn-sm" type="button" data-action="report">Bericht (PDF)</button>
+                <button class="btn btn-ghost btn-sm" type="button" data-action="report">Bericht (PDF)</button>
+                ${placementFor(c, r) ? `<button class="btn btn-primary btn-sm" type="button" data-action="salary">${icon('file')} Lohnblatt (PDF)</button>` : ''}
             </div>
             ${c.text.trim() ? `<details class="rawtext"><summary>Erkannter Text anzeigen</summary><pre>${esc(c.text)}</pre></details>` : ''}
         </div>`;
@@ -895,16 +1187,10 @@
     ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
     dz.addEventListener('drop', e => processSources(Array.from(e.dataTransfer.files).map(f => ({ name: f.name, file: f }))));
 
+    // Auswahl oben gilt für die nächsten Lebensläufe; bereits ausgewertete Personen behalten Stelle und Funktion
     $('#defaultTemplate').addEventListener('change', e => {
         defaultTemplateId = e.target.value;
         storageSet(TEMPLATE_KEY, defaultTemplateId);
-        candidates.forEach(c => {
-            c.autoTemplate = defaultTemplateId === AUTO;
-            c.baseTemplateId = '';
-            if (!c.autoTemplate) c.templateId = defaultTemplateId;
-            else if (c.suggestion) c.templateId = c.suggestion.id;
-        });
-        render();
     });
 
     $('#pasteBtn').addEventListener('click', () => {
@@ -960,6 +1246,20 @@
         const c = candidates.find(x => x.id === selectedId);
         if (!c || c.loading) return;
         const t = e.target;
+        if (t.dataset.allow) {
+            const tpl = tplOf(c);
+            const chosen = new Set(allowancesOf(c, tpl).map(a => a.id));
+            if (t.checked) chosen.add(t.dataset.allow); else chosen.delete(t.dataset.allow);
+            c.allowances = [...chosen];
+            render();
+            return;
+        }
+        if (t.dataset.cf === 'positionId') {
+            const pos = positionOf(t.value);
+            if (pos) applyPosition(c, pos); else c.positionId = '';
+            render();
+            return;
+        }
         if (t.dataset.cf) {
             const lessonsFull = tplOf(c).lessonsFull || 0;
             c[t.dataset.cf] = t.dataset.cf === 'newPensum' ? Math.max(1, Math.min(100, +t.value || 100))
@@ -996,6 +1296,28 @@
             render();
             return;
         }
+        const dup = e.target.closest('[data-opendup]');
+        if (dup) { selectedId = dup.dataset.opendup; cvShownId = null; render(); return; }
+        const ap = e.target.closest('[data-applyadj]');
+        if (ap) { c.adjustmentId = ap.dataset.applyadj; render(); return; }
+        const dm = e.target.closest('[data-dismissadj]');
+        if (dm) { c.dismissedAdj = (c.dismissedAdj || []).concat(dm.dataset.dismissadj); render(); return; }
+        const rvBtn = e.target.closest('[data-review]');
+        if (rvBtn) {
+            const kind = rvBtn.dataset.review;
+            if (kind === 'reset') { if (confirm('Prüfung und Freigabe zurücksetzen?')) { c.review = null; render(); } return; }
+            const name = currentUser();
+            if (!name) return;
+            if (kind === 'check') {
+                c.review = { checkedBy: name, checkedAt: new Date().toISOString(), approvedBy: '', approvedAt: '', snapshot: reviewSnapshot(c) };
+                if ((c.status || 'neu') === 'neu') c.status = 'geprueft';
+            } else if (kind === 'approve') {
+                if (name === c.review.checkedBy) { alert('Beim Vier-Augen-Prinzip muss eine andere Person freigeben als die, die geprüft hat.'); return; }
+                Object.assign(c.review, { approvedBy: name, approvedAt: new Date().toISOString() });
+            }
+            render();
+            return;
+        }
         const use = e.target.closest('[data-usetpl]');
         if (use) { c.templateId = use.dataset.usetpl; c.baseTemplateId = ''; c.autoTemplate = false; render(); return; }
         const edit = e.target.closest('[data-edittpl]');
@@ -1012,6 +1334,8 @@
             inputs[inputs.length - 1]?.focus();
         } else if (act.dataset.action === 'report') {
             CVReport.print([buildView(c)]);
+        } else if (act.dataset.action === 'salary') {
+            CVReport.printSalarySheet(buildView(c));
         } else if (act.dataset.action === 'reparse') {
             if (!confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) return;
             withBusy(async () => {
@@ -1082,6 +1406,7 @@
         $('#aiKey').value = draftAi.apiKey;
         $('#aiPassword').value = draftAi.password;
         $('#adminPassword').value = draftAi.adminPassword || '';
+        $('#userName').value = draftAi.userName || '';
         $('#adminPasswordField').hidden = !shared.adminRequired;
         $('#sharedEnabled').checked = draftAi.shared !== false;
         $('#sharedEnabled').disabled = !shared.enabled;
@@ -1111,6 +1436,7 @@
         draftAi.apiKey = $('#aiKey').value.trim();
         draftAi.password = $('#aiPassword').value;
         draftAi.adminPassword = $('#adminPassword').value;
+        draftAi.userName = $('#userName').value.trim();
         draftAi.shared = $('#sharedEnabled').checked;
         draftAi.storeCandidates = $('#storeCandidates').checked;
         draftAi.textOnly = $('#aiTextOnly').checked;
@@ -1149,65 +1475,141 @@
         </div>`;
     }
 
+    // --- Funktionen: Liste links, gewählte Funktion rechts (mit Reitern) ---
+    let tplSel = null, tplTab = 'general';
+    const TPL_TABS = [{ id: 'general', name: 'Allgemein' }, { id: 'pay', name: 'Lohn' }, { id: 'credit', name: 'Anrechnung' }, { id: 'suggest', name: 'Vorschlag & Hinweis' }];
+    const tplGroup = t => t.group || ((/^(\d+)\./.exec(t.name) || [])[1] ? 'Abschnitt ' + /^(\d+)\./.exec(t.name)[1] : 'Weitere Funktionen');
+    const splitNr = name => { const m = /^(\d+(?:\.\d+)?)\s+(.*)$/.exec(name); return m ? [m[1], m[2]] : ['', name]; };
+    function payBadge(e) {
+        if (e.fixedAnnual) return `<span class="fn-badge">fix ${chf(+e.fixedAnnual).replace('CHF ', '')}</span>`;
+        if (e.classMin) return `<span class="fn-badge">LK ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}</span>`;
+        return '<span class="fn-badge fn-badge-off">keine LK</span>';
+    }
+
     function renderTemplatesForm(openId) {
-        const open = new Set([...document.querySelectorAll('#tplList details[open]')].map(d => d.dataset.tpl));
-        if (openId) open.add(openId);
-        $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${open.has(t.id) ? 'open' : ''}>
-            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${(e => e.fixedAnnual ? ` · fixer Lohn ${chf(+e.fixedAnnual)}` : e.classMin ? ` · Lohnklasse ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}${e.baseName ? ' (Grundfunktion +' + e.baseDelta + ')' : ''}` : '')(P.effectiveTemplate(t, draft.templates))}${t.keywords && t.keywords.length ? ' · ' + icon('sparkles', 'mit Stichwörtern für den Vorschlag') : ''}</span></summary>
-            <div class="tpl-body">
-                <div class="grid-2">
-                    <label class="field"><span>Name der Vorlage (z. B. «Primarlehrperson»)</span><input type="text" data-t="name" value="${esc(t.name)}"></label>
-                    <label class="field"><span>Zielberuf (zählt als «gleicher Beruf»)</span><select data-t="target">${draft.categories.concat(P.SPECIAL_CATEGORIES.filter(x => P.TARGETABLE_SPECIALS.includes(x.id))).map(c => `<option value="${esc(c.id)}"${c.id === t.target ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+        if (openId) tplSel = openId;
+        if (!draft.templates.some(t => t.id === tplSel)) tplSel = draft.templates[0]?.id || null;
+        const groups = [];
+        for (const t of draft.templates) {
+            const g = tplGroup(t);
+            let grp = groups.find(x => x.name === g);
+            if (!grp) groups.push(grp = { name: g, items: [] });
+            grp.items.push(t);
+        }
+        const list = groups.map(g => `<div class="fn-group" data-group="${esc(g.name)}"><div class="fn-group-title">${esc(g.name)}</div>${g.items.map(t => {
+            const e = P.effectiveTemplate(t, draft.templates);
+            const [nr, name] = splitNr(t.name);
+            return `<button type="button" class="fn-item${t.id === tplSel ? ' active' : ''}" data-selt="${esc(t.id)}">
+                ${nr ? `<span class="fn-nr">${esc(nr)}</span>` : ''}<span class="fn-name" data-fnname="${esc(t.id)}">${esc(name)}</span>
+                <span class="fn-meta">${payBadge(e)}${t.keywords && t.keywords.length ? icon('sparkles', 'Stichwörter für den Vorschlag') : ''}${t.allowances && t.allowances.length ? `<span class="fn-badge fn-badge-info" title="Zulagen">+ Zulage</span>` : ''}</span>
+            </button>`;
+        }).join('')}</div>`).join('');
+        const t = draft.templates.find(x => x.id === tplSel);
+        $('#tplList').innerHTML = `<div class="fn-layout">
+            <aside class="fn-list" aria-label="Funktionen">${list}<p class="hint fn-empty" hidden>Keine Funktion gefunden.</p></aside>
+            ${t ? templateEditor(t) : '<section class="fn-editor"><p class="hint">Noch keine Funktion vorhanden.</p></section>'}
+        </div>`;
+        filterTemplates();
+        updateSettingsNav();
+    }
+
+    function templateEditor(t) {
+        const e = P.effectiveTemplate(t, draft.templates);
+        const catsAll = draft.categories.concat(P.SPECIAL_CATEGORIES.filter(x => P.TARGETABLE_SPECIALS.includes(x.id)));
+        const targetName = (catsAll.find(c => c.id === t.target) || { name: '–' }).name;
+        const summary = [
+            e.fixedAnnual ? `Fixer Jahreslohn ${chf(+e.fixedAnnual)}` : e.classMin ? `Lohnklasse ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}` + (e.baseName ? ` (gemäss «${e.baseName}» +${e.baseDelta})` : '') : 'Keine Lohnklassen',
+            (t.classUpYears || []).length ? `Aufstieg nach ${t.classUpYears.join(' und ')} J.` : '',
+            `Zielberuf: ${targetName}`,
+            t.related.length ? `${t.related.length} verwandte Berufe` : ''
+        ].filter(Boolean).join(' · ');
+        const panel = (id, html) => `<div class="fn-panel" data-tpanel="${id}" ${tplTab === id ? '' : 'hidden'}>${html}</div>`;
+        return `<section class="fn-editor tpl-item" data-tpl="${esc(t.id)}">
+            <header class="fn-editor-head">
+                <div class="fn-editor-title">
+                    <input type="text" class="fn-title-input" data-t="name" value="${esc(t.name)}" aria-label="Name der Funktion">
+                    <p class="hint">${esc(summary)}</p>
                 </div>
-                <div class="cat-related"><span>Verwandte Berufe:</span>${draft.categories.filter(o => o.id !== t.target).map(o =>
-                    `<label class="check"><input type="checkbox" data-rel="${esc(o.id)}" ${t.related.includes(o.id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('')}</div>
-                ${rulesGrid(t)}
+                <div class="row-gap">
+                    <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">${icon('copy')} Duplizieren</button>
+                    <button class="btn btn-ghost btn-sm btn-danger" type="button" data-deltpl="${esc(t.id)}">${icon('trash')} Löschen</button>
+                </div>
+            </header>
+            <nav class="fn-tabs" role="tablist">${TPL_TABS.map(x => `<button type="button" role="tab" class="fn-tab${tplTab === x.id ? ' active' : ''}" data-ttab="${x.id}" aria-selected="${tplTab === x.id}">${x.name}</button>`).join('')}</nav>
+            ${panel('general', `
+                <div class="grid-2">
+                    <label class="field"><span>Zielberuf (Erfahrung zählt als «gleiche Funktion»)</span><select data-t="target">${catsAll.map(c => `<option value="${esc(c.id)}"${c.id === t.target ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+                    <label class="field"><span>Gruppe (Abschnitt im Einreihungsplan)</span><input type="text" data-t="group" value="${esc(t.group || '')}" placeholder="${esc(tplGroup(Object.assign({}, t, { group: '' })))}"></label>
+                </div>
+                <div class="field"><span>Verwandte Berufe – Erfahrung «in Verbindung mit der Funktion» (${t.related.length} gewählt)</span>
+                    <div class="chip-list">${draft.categories.filter(o => o.id !== t.target).map(o =>
+                        `<label class="chip"><input type="checkbox" data-rel="${esc(o.id)}" ${t.related.includes(o.id) ? 'checked' : ''}><span>${esc(o.name)}</span></label>`).join('')}</div>
+                </div>`)}
+            ${panel('pay', `
                 <div class="grid-4">
+                    ${numField('Lohnklasse von', 'classMin', t.classMin, { unit: 'LK', placeholder: 'keine' })}
+                    ${numField('Lohnklasse bis', 'classMax', t.classMax, { unit: 'LK', placeholder: 'keine' })}
+                    <label class="field"><span>Klassenaufstieg nach Jahren</span><input type="text" data-t="classUpYears" value="${esc((t.classUpYears || []).join(', '))}" placeholder="z. B. 12, 24"></label>
+                    <label class="field"><span>Gehaltstabelle</span><select data-t="salaryTableId">
+                        <option value="">automatisch (am Stichtag gültig)</option>
+                        ${draft.salaryTables.map(st => `<option value="${esc(st.id)}"${st.id === t.salaryTableId ? ' selected' : ''}>${esc(st.name)}${st.validFrom ? ' ab ' + esc(fmtDay(st.validFrom)) : ''}</option>`).join('')}</select></label>
+                </div>
+                <div class="sub-card">
+                    <h5>Sonderfälle</h5>
+                    <div class="grid-4">
+                        <label class="field"><span>Gemäss Grundfunktion</span><select data-t="baseTemplateId">
+                            <option value="">nein (eigene Lohnklassen)</option>
+                            ${draft.templates.filter(x => x.id !== t.id && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === t.baseTemplateId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+                        ${numField('plus Klassen', 'baseDelta', t.baseDelta, { unit: 'LK', placeholder: '1' })}
+                        ${numField('höchstens Klasse', 'classCap', t.classCap, { unit: 'LK', placeholder: 'keine' })}
+                        ${numField('Fixer Jahreslohn', 'fixedAnnual', t.fixedAnnual, { unit: 'CHF', step: 0.05, placeholder: 'kein' })}
+                    </div>
+                </div>
+                <div class="grid-4">
+                    <label class="field"><span>Monatslohn</span><select data-t="payments">
+                        <option value="13"${t.payments !== 12 ? ' selected' : ''}>13 Auszahlungen</option>
+                        <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
+                    ${numField('Lektionen bei 100 %', 'lessonsFull', t.lessonsFull, { unit: 'Lekt.', step: 0.5, placeholder: 'Pensum in %' })}
+                </div>
+                <div class="sub-card">
+                    <div class="card-head-row"><h5>Zulagen</h5><button class="btn btn-ghost btn-sm" type="button" data-addal>${icon('plus')} Zulage</button></div>
+                    ${(t.allowances || []).length ? `<div class="al-list">${t.allowances.map(a => `<div class="al-row" data-al="${esc(a.id)}">
+                        <label class="field"><span>Bezeichnung</span><input type="text" data-alf="label" value="${esc(a.label)}"></label>
+                        <label class="field"><span>Betrag pro Jahr bei 100 %</span><div class="suffix"><input type="number" data-alf="annual" min="0" step="0.05" value="${esc(a.annual)}"><em>CHF</em></div></label>
+                        <label class="field"><span>Vorschlagen bei Ausbildung (Stichwörter)</span><input type="text" data-alf="autoKeywords" value="${esc(a.autoKeywords.join(', '))}" placeholder="z. B. heilpädagog, hfh"></label>
+                        <button class="btn-icon" type="button" data-delal="${esc(a.id)}" title="Zulage entfernen" aria-label="Zulage entfernen">${icon('trash')}</button>
+                    </div>`).join('')}</div>` : '<p class="hint">Keine Zulagen. Zulagen werden anteilig zum Pensum zum Lohn gerechnet und lassen sich pro Person an- und abwählen.</p>'}
+                </div>`)}
+            ${panel('credit', `
+                ${rulesGrid(t)}
+                <div class="grid-3">
                     <label class="field"><span>Gleichzeitige Tätigkeiten</span><select data-t="combine">
                         <option value="max"${t.combine === 'max' ? ' selected' : ''}>höchste Anrechnung zählt</option>
                         <option value="sum"${t.combine === 'sum' ? ' selected' : ''}>addieren, max. 100 % pro Monat</option></select></label>
                     <label class="field"><span>Stichtag</span><select data-t="cutoff">
                         <option value="today"${t.cutoff !== 'yearEnd' ? ' selected' : ''}>heute</option>
                         <option value="yearEnd"${t.cutoff === 'yearEnd' ? ' selected' : ''}>31.12. des laufenden Jahres</option></select></label>
-                    ${numField('Familienarbeit max.', 'familyMaxYears', t.familyMaxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
+                    <label class="field"><span>Rundung</span><select data-t="rounding">${P.ROUNDING.map(r => `<option value="${r.id}"${r.id === t.rounding ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
+                    ${numField('Familienarbeit höchstens', 'familyMaxYears', t.familyMaxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
                     ${numField('Anrechnung ab Alter', 'minAge', t.minAge, { unit: 'J.', placeholder: 'kein' })}
                     ${numField('Höchstens anrechenbar', 'maxYears', t.maxYears, { unit: 'J.', step: 0.5, placeholder: 'kein' })}
-                    <label class="field"><span>Rundung</span><select data-t="rounding">${P.ROUNDING.map(r => `<option value="${r.id}"${r.id === t.rounding ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
-                </div>
-                <div class="grid-4">
-                    ${numField('Lohnklasse von', 'classMin', t.classMin, { unit: 'LK', placeholder: 'keine' })}
-                    ${numField('Lohnklasse bis', 'classMax', t.classMax, { unit: 'LK', placeholder: 'keine' })}
-                    <label class="field"><span>Klassenaufstieg nach Jahren</span><input type="text" data-t="classUpYears" value="${esc((t.classUpYears || []).join(', '))}" placeholder="z. B. 12, 24"></label>
-                    <label class="field"><span>Gehaltstabelle</span><select data-t="salaryTableId">
-                        <option value="">automatisch (gültig am Stichtag)</option>
-                        ${draft.salaryTables.map(st => `<option value="${esc(st.id)}"${st.id === t.salaryTableId ? ' selected' : ''}>${esc(st.name)}${st.validFrom ? ' ab ' + esc(fmtDay(st.validFrom)) : ''}</option>`).join('')}</select></label>
-                </div>
-                <div class="grid-4">
-                    <label class="field"><span>Gemäss Grundfunktion</span><select data-t="baseTemplateId">
-                        <option value="">nein (eigene Lohnklassen)</option>
-                        ${draft.templates.filter(x => x.id !== t.id && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === t.baseTemplateId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
-                    ${numField('plus Klassen', 'baseDelta', t.baseDelta, { unit: 'LK', placeholder: '1' })}
-                    ${numField('höchstens Klasse', 'classCap', t.classCap, { unit: 'LK', placeholder: 'keine' })}
-                    ${numField('Fixer Jahreslohn (statt Lohnklasse)', 'fixedAnnual', t.fixedAnnual, { unit: 'CHF', step: 0.05, placeholder: 'kein' })}
-                </div>
-                <div class="grid-4">
-                    <label class="field"><span>Monatslohn</span><select data-t="payments">
-                        <option value="13"${t.payments !== 12 ? ' selected' : ''}>13 Auszahlungen</option>
-                        <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
-                    ${numField('Lektionen bei 100 % (optional)', 'lessonsFull', t.lessonsFull, { unit: 'Lekt.', step: 0.5, placeholder: 'Pensum in %' })}
-                </div>
-                <div class="grid-2">
-                    <label class="field"><span>Stichwörter für den automatischen Vorschlag (Ausbildung/Tätigkeit im Lebenslauf; «a+b» = beide im gleichen Eintrag)</span><textarea rows="2" data-t="keywords" placeholder="z. B. sozialpädagog+hf, sozialpädagog+fh">${esc((t.keywords || []).join(', '))}</textarea></label>
-                    <label class="field"><span>Hinweis zur Einreihung (erscheint beim Lohnvorschlag und im Bericht)</span><textarea rows="2" data-t="note">${esc(t.note || '')}</textarea></label>
-                </div>
-                <div class="row-gap">
-                    <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">Duplizieren</button>
-                    <button class="btn btn-ghost btn-sm" type="button" data-deltpl="${esc(t.id)}">Löschen</button>
-                </div>
-            </div>
-        </details>`).join('');
-        filterTemplates();
-        updateSettingsNav();
+                </div>`)}
+            ${panel('suggest', `
+                <label class="field"><span>Stichwörter für den automatischen Vorschlag – Ausbildung oder Tätigkeit im Lebenslauf, durch Komma getrennt; «a+b» = beide im gleichen Eintrag</span><textarea rows="4" data-t="keywords" placeholder="z. B. sozialpädagog+hf, sozialpädagog+fh">${esc((t.keywords || []).join(', '))}</textarea></label>
+                <label class="field"><span>Hinweis zur Einreihung (erscheint beim Lohnvorschlag und im Bericht)</span><textarea rows="3" data-t="note">${esc(t.note || '')}</textarea></label>`)}
+        </section>`;
+    }
+
+    /** Korrekturen der Lohnklasse (z. B. −1 ohne Ausbildung) mit Regel für den automatischen Vorschlag. */
+    function renderAdjList() {
+        $('#adjList').innerHTML = (draft.classAdjustments || []).map(a => `<div class="adj-row" data-adj="${esc(a.id)}">
+            <label class="field"><span>Bezeichnung</span><input type="text" data-af="label" value="${esc(a.label)}"></label>
+            <label class="field"><span>Klassen</span><input type="number" data-af="delta" step="1" value="${esc(a.delta)}"></label>
+            <label class="field"><span>Automatisch vorschlagen</span><select data-af="kind">${P.AUTO_KINDS.map(k => `<option value="${k.id}"${(a.auto?.kind || '') === k.id ? ' selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
+            <label class="field"><span>Mind. Jahre Führung</span><input type="number" data-af="minYears" min="0" step="1" value="${esc(a.auto?.minYears ?? '')}" placeholder="–" ${a.auto?.kind === 'leadershipTraining' ? '' : 'disabled'}></label>
+            <label class="field"><span>Nur Funktionen, beginnend mit</span><input type="text" data-af="prefix" value="${esc(a.auto?.prefix || '')}" placeholder="alle (z. B. 2.)" ${a.auto?.kind ? '' : 'disabled'}></label>
+            <button class="btn-icon" type="button" data-deladj="${esc(a.id)}" title="Korrektur löschen" aria-label="Korrektur löschen">${icon('trash')}</button>
+        </div>`).join('') || '<p class="hint">Keine Korrekturen.</p>';
     }
 
     function renderCatsForm() {
@@ -1275,7 +1677,10 @@
         renderTemplatesForm(openTplId);
         renderCatsForm();
         renderSalaryList();
+        renderAdjList();
         $('#retentionDays').value = draft.retentionDays ?? '';
+        $('#retentionByStatus').innerHTML = P.STATUSES.map(st => `<label class="field"><span>${esc(st.name)}</span><div class="suffix"><input type="number" min="0" step="1" data-rs="${st.id}" value="${draft.retentionByStatus?.[st.id] ?? ''}" placeholder="–"><em>Tage</em></div></label>`).join('');
+        $('#fourEyes').checked = !!draft.fourEyes;
         updateSettingsNav();
     }
 
@@ -1305,10 +1710,14 @@
     }
     function filterTemplates() {
         const terms = $('#tplSearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        document.querySelectorAll('#tplList .tpl-item').forEach(item => {
-            const text = item.querySelector('summary').textContent.toLowerCase();
-            item.hidden = !terms.every(t => text.includes(t));
+        let shown = 0;
+        document.querySelectorAll('#tplList .fn-item').forEach(item => {
+            item.hidden = !terms.every(t => item.textContent.toLowerCase().includes(t));
+            if (!item.hidden) shown++;
         });
+        document.querySelectorAll('#tplList .fn-group').forEach(g => { g.hidden = ![...g.querySelectorAll('.fn-item')].some(i => !i.hidden); });
+        const empty = document.querySelector('#tplList .fn-empty');
+        if (empty) empty.hidden = shown > 0;
     }
     document.querySelector('.set-nav').addEventListener('click', e => {
         const b = e.target.closest('[data-pane]');
@@ -1321,6 +1730,17 @@
     $('#tplSearch').addEventListener('input', filterTemplates);
 
     function readSettingsForm() {
+        document.querySelectorAll('#adjList .adj-row').forEach(row => {
+            const a = draft.classAdjustments.find(x => x.id === row.dataset.adj);
+            if (!a) return;
+            const f = k => row.querySelector(`[data-af="${k}"]`).value;
+            a.label = f('label').trim() || 'Korrektur';
+            a.delta = Math.round(+f('delta')) || 0;
+            a.auto = f('kind') ? { kind: f('kind'), minYears: +f('minYears') > 0 ? +f('minYears') : null, prefix: f('prefix').trim() } : null;
+        });
+        draft.retentionByStatus = {};
+        document.querySelectorAll('[data-rs]').forEach(inp => { if (inp.value.trim() !== '' && +inp.value >= 0) draft.retentionByStatus[inp.dataset.rs] = Math.round(+inp.value); });
+        draft.fourEyes = $('#fourEyes').checked;
         const days = $('#retentionDays').value.trim();
         draft.retentionDays = days === '' ? null : Math.max(0, Math.round(+days) || 0);
         document.querySelectorAll('#catList .cat-item').forEach(item => {
@@ -1358,6 +1778,11 @@
             t.fixedAnnual = optNum('fixedAnnual');
             t.keywords = v('keywords').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
             t.note = v('note').trim();
+            t.group = v('group').trim();
+            t.allowances = [...item.querySelectorAll('.al-row')].map(row => {
+                const f = k => row.querySelector(`[data-alf="${k}"]`).value;
+                return { id: row.dataset.al, label: f('label').trim() || 'Zulage', annual: Math.max(0, +f('annual') || 0), autoKeywords: f('autoKeywords').split(',').map(x => x.trim().toLowerCase()).filter(Boolean) };
+            });
             t.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel).filter(r => r !== t.target);
         });
         document.querySelectorAll('#salaryList [data-st]').forEach(item => {
@@ -1474,25 +1899,64 @@
     });
     $('#settingsDialog').addEventListener('input', e => {
         if (e.target.dataset.t === 'name') {
-            const name = e.target.closest('.tpl-item')?.querySelector('.tpl-name');
-            if (name) name.textContent = e.target.value || 'Unbenannte Vorlage';
+            const id = e.target.closest('.tpl-item')?.dataset.tpl;
+            const el = id && document.querySelector(`#tplList [data-fnname="${CSS.escape(id)}"]`);
+            if (el) el.textContent = splitNr(e.target.value || 'Unbenannte Funktion')[1];
         }
+    });
+    $('#addAdj').addEventListener('click', () => {
+        readSettingsForm();
+        draft.classAdjustments.push({ id: 'k' + Math.random().toString(36).slice(2, 7), label: 'Neue Korrektur', delta: -1, cap: null, auto: null });
+        renderAdjList();
+    });
+    $('#adjList').addEventListener('click', e => {
+        const d = e.target.closest('[data-deladj]');
+        if (!d) return;
+        readSettingsForm();
+        draft.classAdjustments = draft.classAdjustments.filter(a => a.id !== d.dataset.deladj);
+        renderAdjList();
+    });
+    $('#adjList').addEventListener('change', e => {
+        if (e.target.dataset.af === 'kind') { readSettingsForm(); renderAdjList(); }
     });
     $('#addTpl').addEventListener('click', () => {
         readSettingsForm();
-        const t = P.makeTemplate(draft.categories[0].id, 'Neue Vorlage');
+        const t = P.makeTemplate(draft.categories[0].id, 'Neue Funktion');
+        tplTab = 'general';
         draft.templates.push(t);
         renderTemplatesForm(t.id);
         document.querySelector(`#tplList [data-tpl="${t.id}"] [data-t="name"]`)?.select();
     });
     $('#tplList').addEventListener('click', e => {
+        const sel = e.target.closest('[data-selt]');
+        if (sel) { readSettingsForm(); renderTemplatesForm(sel.dataset.selt); $('#tplList .fn-editor')?.scrollIntoView({ block: 'nearest' }); return; }
+        const tab = e.target.closest('[data-ttab]');
+        if (tab) {
+            tplTab = tab.dataset.ttab;
+            document.querySelectorAll('#tplList .fn-tab').forEach(b => { b.classList.toggle('active', b === tab); b.setAttribute('aria-selected', b === tab); });
+            document.querySelectorAll('#tplList .fn-panel').forEach(p => { p.hidden = p.dataset.tpanel !== tplTab; });
+            return;
+        }
+        if (e.target.closest('[data-addal]') || e.target.closest('[data-delal]')) {
+            readSettingsForm();
+            const t = draft.templates.find(x => x.id === tplSel);
+            const delId = e.target.closest('[data-delal]')?.dataset.delal;
+            if (delId) t.allowances = t.allowances.filter(a => a.id !== delId);
+            else t.allowances.push({ id: 'z' + Math.random().toString(36).slice(2, 7), label: 'Neue Zulage', annual: 0, autoKeywords: [] });
+            renderTemplatesForm();
+            return;
+        }
         const del = e.target.closest('[data-deltpl]');
         const cp = e.target.closest('[data-copytpl]');
         if (!del && !cp) return;
         readSettingsForm();
         if (del) {
             if (draft.templates.length === 1) { alert('Es muss mindestens eine Vorlage vorhanden sein.'); return; }
-            draft.templates = draft.templates.filter(t => t.id !== del.dataset.deltpl);
+            const t = draft.templates.find(x => x.id === del.dataset.deltpl);
+            if (!confirm(`Funktion «${t.name}» löschen?`)) return;
+            const i = draft.templates.indexOf(t);
+            draft.templates.splice(i, 1);
+            tplSel = (draft.templates[i] || draft.templates[i - 1]).id;
             renderTemplatesForm();
         } else {
             const src = draft.templates.find(t => t.id === cp.dataset.copytpl);
@@ -1808,6 +2272,18 @@ Deutsch, Englisch`;
 
     // --- Events: Bewerbende ---
     $('#applicantSearch').addEventListener('input', renderApplicants);
+    $('#statusFilter').addEventListener('click', e => {
+        const b = e.target.closest('[data-stfilter]');
+        if (b) { applicantStatus = b.dataset.stfilter; renderApplicants(); }
+    });
+    $('#positionFilter').addEventListener('change', e => { applicantPos = e.target.value; renderApplicants(); });
+    $('#compareTable').addEventListener('click', e => {
+        const b = e.target.closest('[data-select]');
+        if (!b) return;
+        selectedId = b.dataset.select;
+        render();
+        $('#applicantDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     $('#applicantsBody').addEventListener('click', e => {
         const rm = e.target.closest('[data-remove]');
         if (rm) { removeCandidate(rm.dataset.remove); return; }

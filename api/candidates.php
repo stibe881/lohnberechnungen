@@ -42,17 +42,25 @@ $table = preg_replace('/[^a-z0-9_]/i', '', $db['table'] ?? 'lr_candidates');
 $files = $table . '_files';
 $maxFileMb = max(1, (int) ($config['max_file_mb'] ?? 12));
 
-/** Aufbewahrung in Tagen: zentrale Einstellungen (in der App einstellbar) vor config.php. */
-function keepDays($config) {
+/**
+ * Aufbewahrung in Tagen: zentrale Einstellungen (in der App einstellbar) vor config.php.
+ * Zusätzlich pro Status (z. B. Absagen nach 90 Tagen); Status ohne eigene Frist nutzen die allgemeine.
+ */
+function retention($config) {
+    $default = max(0, (int) ($config['keep_days'] ?? 180));
+    $byStatus = [];
     $file = rtrim($config['data_dir'] ?? (__DIR__ . '/data'), '/') . '/settings.json';
     if (is_file($file)) {
         $store = json_decode((string) file_get_contents($file), true);
         $days = $store['settings']['retentionDays'] ?? null;
-        if (is_numeric($days) && $days >= 0) return (int) $days;
+        if (is_numeric($days) && $days >= 0) $default = (int) $days;
+        foreach (($store['settings']['retentionByStatus'] ?? []) as $status => $d) {
+            if (preg_match('/^[a-z]{2,20}$/', (string) $status) && is_numeric($d) && $d >= 0) $byStatus[$status] = (int) $d;
+        }
     }
-    return max(0, (int) ($config['keep_days'] ?? 180));
+    return [$default, $byStatus];
 }
-$keepDays = keepDays($config);
+[$keepDays, $keepByStatus] = retention($config);
 
 function problem($configFile, $hasPassword, $hasDb) {
     if (!is_file($configFile)) return 'Im Ordner «api» gibt es keine Datei «config.php».';
@@ -79,8 +87,12 @@ function ensureTables($pdo, $table, $files) {
         name VARCHAR(255) NOT NULL DEFAULT '',
         data " . ($mysql ? 'MEDIUMTEXT' : 'TEXT') . " NOT NULL,
         created_at DATETIME NOT NULL,
-        updated_at DATETIME NOT NULL
+        updated_at DATETIME NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT ''
     )$engine");
+    // Tabellen aus früheren Versionen: Spalte «status» nachrüsten
+    try { $pdo->query("SELECT status FROM $table LIMIT 1"); }
+    catch (Exception $e) { $pdo->exec("ALTER TABLE $table ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT ''"); }
     $pdo->exec("CREATE TABLE IF NOT EXISTS $files (
         id VARCHAR(40) NOT NULL PRIMARY KEY,
         filename VARCHAR(255) NOT NULL DEFAULT '',
@@ -104,7 +116,7 @@ if ($action === 'status' && $method === 'GET') {
         try { ensureTables(connect($db), $table, $files); }
         catch (Exception $e) { $problem = 'Keine Verbindung zur Datenbank. Bitte die Angaben «db» in config.php prüfen.'; }
     }
-    out(['enabled' => $problem === null, 'keepDays' => $keepDays, 'maxFileMb' => $maxFileMb, 'problem' => $problem]);
+    out(['enabled' => $problem === null, 'keepDays' => $keepDays, 'keepByStatus' => (object) $keepByStatus, 'maxFileMb' => $maxFileMb, 'problem' => $problem]);
 }
 
 $problem = problem($configFile, $hasPassword, $hasDb);
@@ -163,10 +175,25 @@ if ($action === 'file') {
 }
 
 if ($method === 'GET') {
-    if ($keepDays > 0) {
-        $pdo->prepare("DELETE FROM $table WHERE updated_at < ?")->execute([gmdate('Y-m-d H:i:s', time() - $keepDays * 86400)]);
-        $pdo->exec("DELETE FROM $files WHERE id NOT IN (SELECT id FROM $table)");
+    // Aufbewahrung: pro Status eigene Frist, sonst die allgemeine («neu» gilt auch für Einträge ohne Status)
+    $cutoff = function ($days) { return gmdate('Y-m-d H:i:s', time() - $days * 86400); };
+    foreach ($keepByStatus as $status => $days) {
+        if ($days <= 0) continue;
+        $statuses = $status === 'neu' ? ['neu', ''] : [$status];
+        $in = implode(',', array_fill(0, count($statuses), '?'));
+        $pdo->prepare("DELETE FROM $table WHERE status IN ($in) AND updated_at < ?")->execute(array_merge($statuses, [$cutoff($days)]));
     }
+    if ($keepDays > 0) {
+        $own = array_keys($keepByStatus);
+        if (in_array('neu', $own, true)) $own[] = '';
+        if ($own) {
+            $in = implode(',', array_fill(0, count($own), '?'));
+            $pdo->prepare("DELETE FROM $table WHERE status NOT IN ($in) AND updated_at < ?")->execute(array_merge($own, [$cutoff($keepDays)]));
+        } else {
+            $pdo->prepare("DELETE FROM $table WHERE updated_at < ?")->execute([$cutoff($keepDays)]);
+        }
+    }
+    $pdo->exec("DELETE FROM $files WHERE id NOT IN (SELECT id FROM $table)");
     $rows = $pdo->query("SELECT c.id, c.data, c.created_at, c.updated_at, f.filename, f.size
         FROM $table c LEFT JOIN $files f ON f.id = c.id ORDER BY c.created_at")->fetchAll();
     $list = [];
@@ -180,7 +207,7 @@ if ($method === 'GET') {
         if ($r['filename'] !== null) { $c['fileName'] = $r['filename']; $c['fileSize'] = (int) $r['size']; }
         $list[] = $c;
     }
-    out(['candidates' => $list, 'keepDays' => $keepDays]);
+    out(['candidates' => $list, 'keepDays' => $keepDays, 'keepByStatus' => (object) $keepByStatus]);
 }
 
 if ($method === 'DELETE') {
@@ -203,13 +230,14 @@ unset($c['pdfBase64'], $c['loading'], $c['savedAt'], $c['file'], $c['fileSize'])
 $json = json_encode($c, JSON_UNESCAPED_UNICODE);
 $name = (string) ($c['name'] ?? '');
 $name = function_exists('mb_substr') ? mb_substr($name, 0, 255) : substr($name, 0, 255);
+$status = preg_match('/^[a-z]{2,20}$/', (string) ($c['status'] ?? '')) ? $c['status'] : '';
 
 if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-    $sql = "INSERT INTO $table (id, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE name = VALUES(name), data = VALUES(data), updated_at = VALUES(updated_at)";
+    $sql = "INSERT INTO $table (id, name, data, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE name = VALUES(name), data = VALUES(data), updated_at = VALUES(updated_at), status = VALUES(status)";
 } else {
-    $sql = "INSERT INTO $table (id, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET name = excluded.name, data = excluded.data, updated_at = excluded.updated_at";
+    $sql = "INSERT INTO $table (id, name, data, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name, data = excluded.data, updated_at = excluded.updated_at, status = excluded.status";
 }
-$pdo->prepare($sql)->execute([$cid, $name, $json, $now, $now]);
+$pdo->prepare($sql)->execute([$cid, $name, $json, $now, $now, $status]);
 out(['saved' => $cid, 'savedAt' => str_replace(' ', 'T', $now) . 'Z']);

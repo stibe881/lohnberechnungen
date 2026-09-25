@@ -186,7 +186,9 @@
             baseTemplateId: '',    // «gemäss Grundfunktion plus …»: Lohnklassen einer anderen Vorlage übernehmen
             baseDelta: 1,          //   … plus so viele Klassen
             classCap: null,        //   … höchstens bis zu dieser Klasse
-            fixedAnnual: null      // fixer Jahreslohn bei 100 % statt Lohnklasse (z. B. Praktikum)
+            fixedAnnual: null,     // fixer Jahreslohn bei 100 % statt Lohnklasse (z. B. Praktikum)
+            group: '',             // Abschnitt im Einreihungsplan (z. B. «Führungsebene 1»), für die Übersicht
+            allowances: []         // Zulagen: [{id, label, annual (CHF/Jahr bei 100 %), autoKeywords (Ausbildung, bei der sie vorgeschlagen wird)}]
         };
     }
 
@@ -208,6 +210,10 @@
         }
         if (!Array.isArray(out.classUpYears)) out.classUpYears = [12, 24];
         if (out.payments !== 12) out.payments = 13;
+        out.allowances = (Array.isArray(out.allowances) ? out.allowances : []).filter(a => a && a.label).map((a, i) => ({
+            id: a.id || 'z' + (i + 1), label: String(a.label), annual: Math.max(0, +a.annual || 0),
+            autoKeywords: Array.isArray(a.autoKeywords) ? a.autoKeywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : []
+        }));
         if (!Array.isArray(out.keywords)) out.keywords = [];
         return out;
     }
@@ -244,7 +250,14 @@
         const targets = new Set([...ids, ...TARGETABLE_SPECIALS]);
         out.templates.forEach(t => { t.related = (t.related || []).filter(r => ids.has(r)); });
         out.templates = out.templates.filter(t => targets.has(t.target));
-        out.classAdjustments = Array.isArray(s.classAdjustments) ? s.classAdjustments : DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
+        out.classAdjustments = (Array.isArray(s.classAdjustments) ? s.classAdjustments : DEFAULT_ADJUSTMENTS).map(normalizeAdjustment);
+        out.positions = (Array.isArray(s.positions) ? s.positions : []).filter(p => p && p.title).map(normalizePosition);
+        out.retentionByStatus = {};
+        for (const st of STATUSES) {
+            const v = s.retentionByStatus && s.retentionByStatus[st.id];
+            if (v !== null && v !== undefined && v !== '' && +v >= 0) out.retentionByStatus[st.id] = Math.round(+v);
+        }
+        out.fourEyes = !!s.fourEyes;
         const tables = Array.isArray(s.salaryTables) ? s.salaryTables : s.salaryTable ? [s.salaryTable] : [];
         out.salaryTables = tables.filter(t => t && t.classes && Object.keys(t.classes).length).map(normalizeSalaryTable);
         const tableIds = new Set(out.salaryTables.map(t => t.id));
@@ -368,9 +381,48 @@
     }
 
     const DEFAULT_ADJUSTMENTS = [
-        { id: 'minus1', label: '−1 Klasse (z. B. fehlende Ausbildung für die Funktion)', delta: -1, cap: null },
+        { id: 'minus1', label: '−1 Klasse (z. B. fehlende Ausbildung für die Funktion)', delta: -1, cap: null, auto: { kind: 'missingQualification' } },
         { id: 'plus1', label: '+1 Klasse', delta: 1, cap: null }
     ];
+
+    /** Bearbeitungsstand einer Bewerbung (Reihenfolge = Ablauf). */
+    const STATUSES = [
+        { id: 'neu', name: 'Neu' },
+        { id: 'geprueft', name: 'Geprüft' },
+        { id: 'angebot', name: 'Angebot' },
+        { id: 'eingestellt', name: 'Eingestellt' },
+        { id: 'abgesagt', name: 'Abgesagt' }
+    ];
+
+    /** Regeln, nach denen eine Korrektur automatisch vorgeschlagen wird. */
+    const AUTO_KINDS = [
+        { id: '', name: 'nicht automatisch' },
+        { id: 'missingQualification', name: 'wenn keine passende Ausbildung erkannt wird' },
+        { id: 'foreignDiploma', name: 'bei Ausbildung im Ausland' },
+        { id: 'leadershipTraining', name: 'bei Führungsausbildung (optional mit Mindestjahren Führung)' }
+    ];
+
+    function normalizeAdjustment(a, i) {
+        const auto = a.auto && AUTO_KINDS.some(k => k.id === a.auto.kind && k.id) ? {
+            kind: a.auto.kind,
+            minYears: +a.auto.minYears > 0 ? +a.auto.minYears : null,
+            prefix: String(a.auto.prefix || '').trim()   // nur Funktionen, deren Name so beginnt (mehrere mit Komma)
+        } : null;
+        return { id: a.id || 'k' + (i + 1), label: String(a.label || 'Korrektur'), delta: Math.round(+a.delta) || 0, cap: a.cap ? +a.cap : null, auto };
+    }
+
+    function normalizePosition(p, i) {
+        return {
+            id: p.id || 'p_' + Math.random().toString(36).slice(2, 9),
+            title: String(p.title).trim(),
+            templateId: p.templateId || '',
+            pensum: Math.max(1, Math.min(100, +p.pensum || 100)),
+            lessons: +p.lessons > 0 ? +p.lessons : null,
+            start: /^\d{4}-\d{2}-\d{2}$/.test(p.start || '') ? p.start : null,
+            status: ['offen', 'besetzt', 'geschlossen'].includes(p.status) ? p.status : 'offen',
+            note: String(p.note || '')
+        };
+    }
 
     /** Umlaute und «ae/oe/ue» gleich behandeln («Sozialpaedagogin» = «Sozialpädagogin»). */
     const fold = s => s.replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue');
@@ -823,6 +875,107 @@
         return out;
     }
 
+    // --- Korrekturen vorschlagen, Zulagen, Lohnentwicklung, Doppelbewerbungen ---
+
+    const isEducation = e => e.category === '__ausbildung' || e.category === '__zweitausbildung';
+    const entryText = e => fold(' ' + ((e.title || '') + ' ' + (e.details || '')).toLowerCase() + ' ');
+    // Text ist mit fold() umgewandelt (ä → ae …), daher nur Schreibweisen ohne Umlaute
+    const FOREIGN_RE = /\b(deutschland|germany|oesterreich|austria|frankreich|france|italien|italia|italy|spanien|spain|portugal|polen|poland|kosovo|serbien|kroatien|bosnien|albanien|mazedonien|tuerkei|turkey|niederlande|belgien|ungarn|rumaenien|ukraine|russland|usa|united states|england|united kingdom|brasilien|indien|wien|graz|innsbruck|salzburg|linz|berlin|hamburg|muenchen|koeln|frankfurt am main|stuttgart|dresden|leipzig|mailand|milano|roma|paris|lyon|strasbourg|madrid|barcelona|lissabon|lisboa|porto|warschau|zagreb|belgrad|pristina|sarajevo|budapest|bukarest|london)\b/i;
+    const LEAD_TRAINING_RE = /(führung|fuehrung|leadership|management|leitungs|mba\b|cas .*leit|mas .*leit|sve\b|institutionsleit|heimleit|teamleiter(in)? mit|führungsfach|fuehrungsfach|betriebswirtschaft)/i;
+    const LEAD_WORK_RE = /(leiter|leiterin|leitung|führung|fuehrung|head of|chef|manager|direktor|direktorin|geschäftsführ|geschaeftsfuehr|vorgesetzt)/i;
+
+    /** Jahre in Führungsfunktionen (überlappende Stellen zählen nur einmal). */
+    function leadershipYears(entries, today) {
+        const nowIdx = (today || new Date()).getFullYear() * 12 + (today || new Date()).getMonth();
+        const months = new Set();
+        for (const e of entries || []) {
+            if (isEducation(e) || e.include === false || !LEAD_WORK_RE.test(e.title || '')) continue;
+            const s = ymToIndex(e.start), en = e.ongoing ? nowIdx : ymToIndex(e.end);
+            if (s === null || en === null) continue;
+            for (let k = s; k <= Math.min(en, nowIdx); k++) months.add(k);
+        }
+        return months.size / 12;
+    }
+
+    /**
+     * Schlägt Korrekturen der Lohnklasse vor, deren Regel (auto) im Lebenslauf zutrifft:
+     * fehlende Ausbildung für die Funktion, Ausbildung im Ausland, Führungsausbildung (+ Mindestjahre Führung).
+     * flags (optional, von Claude) übersteuern die eigene Erkennung.
+     * @returns {Array<{id, label, delta, reason}>} stärkste zuerst; bei Führung nur die höchste passende
+     */
+    function suggestCorrections(entries, tpl, adjustments, flags, today) {
+        const edu = (entries || []).filter(isEducation);
+        const out = [];
+        flags = flags || {};
+        const applies = a => !a.auto.prefix || a.auto.prefix.split(',').map(x => x.trim()).filter(Boolean).some(p => (tpl.name || '').startsWith(p));
+        for (const a of (adjustments || []).filter(x => x.auto && x.auto.kind)) {
+            if (!applies(a)) continue;
+            if (a.auto.kind === 'missingQualification') {
+                const kws = (tpl.keywords || []).filter(Boolean);
+                if (!kws.length) continue;
+                const ok = typeof flags.qualificationMatches === 'boolean' ? flags.qualificationMatches : edu.some(e => kws.some(k => keywordHit(entryText(e), k)));
+                if (!ok) out.push({ id: a.id, label: a.label, delta: a.delta, reason: edu.length ? `Keine Ausbildung gefunden, die zur Funktion «${tpl.name}» passt` : 'Keine Ausbildung im Lebenslauf erkannt' });
+            } else if (a.auto.kind === 'foreignDiploma') {
+                const hit = edu.find(e => FOREIGN_RE.test(entryText(e)));
+                if (flags.foreignDiploma === true || (flags.foreignDiploma !== false && hit)) out.push({ id: a.id, label: a.label, delta: a.delta, reason: hit ? `Ausbildung im Ausland: «${hit.title}» – prüfen, ob in der Schweiz anerkannt` : 'Ausbildung im Ausland – Anerkennung prüfen' });
+            } else if (a.auto.kind === 'leadershipTraining') {
+                const training = edu.find(e => LEAD_TRAINING_RE.test(entryText(e)));
+                const hasTraining = typeof flags.leadershipTraining === 'boolean' ? flags.leadershipTraining : !!training;
+                const years = typeof flags.leadershipYears === 'number' ? flags.leadershipYears : leadershipYears(entries, today);
+                if (!hasTraining || (a.auto.minYears && years < a.auto.minYears)) continue;
+                out.push({ id: a.id, label: a.label, delta: a.delta, lead: true,
+                    reason: (training ? `Führungsausbildung «${training.title}»` : 'Führungsausbildung') + (a.auto.minYears ? `, ${Math.round(years * 10) / 10} Jahre Führungserfahrung (mind. ${a.auto.minYears})` : '') });
+            }
+        }
+        // Von mehreren Führungs-Korrekturen nur die höchste
+        const lead = out.filter(x => x.lead).sort((x, y) => y.delta - x.delta)[0];
+        return out.filter(x => !x.lead || x === lead).map(({ lead: _, ...x }) => x).sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+    }
+
+    /** Zulagen einer Funktion, die aufgrund der Ausbildung vorgeschlagen werden (autoKeywords). */
+    function suggestedAllowances(tpl, entries) {
+        const edu = (entries || []).filter(isEducation);
+        return (tpl.allowances || []).filter(a => a.autoKeywords.length && edu.some(e => a.autoKeywords.some(k => keywordHit(entryText(e), k)))).map(a => a.id);
+    }
+
+    /**
+     * Lohnentwicklung der nächsten Jahre: pro Kalenderjahr ein Erfahrungsjahr mehr (Stufenaufstieg auf den
+     * 1. Januar), mit Klassenaufstieg und der Gehaltstabelle, die im jeweiligen Jahr gilt (sonst die neueste).
+     * @returns {Array<{year, years, cls, stage, salary}>}
+     */
+    function salaryOutlook(creditedYears, tpl, adjustment, tables, today, count) {
+        today = today || new Date();
+        const rows = [];
+        for (let k = 0; k <= (count || 10); k++) {
+            const year = today.getFullYear() + k;
+            const sel = selectSalaryTable(tables, Object.assign({}, tpl, { cutoff: 'today' }), new Date(year, 0, 1));
+            const pl = placement(creditedYears + k, tpl, adjustment, sel.table);
+            if (!pl) return [];
+            rows.push({ year, years: pl.years, cls: pl.cls, stage: pl.stage, salary: pl.salary });
+        }
+        return rows;
+    }
+
+    /** Mögliche Doppelbewerbungen: gleicher Name und gleiches (oder fehlendes) Geburtsdatum. */
+    function findDuplicates(list) {
+        const key = n => fold(String(n || '').toLowerCase()).replace(/[^a-z]+/g, ' ').trim().split(' ').sort().join(' ');
+        const groups = new Map();
+        for (const c of list || []) {
+            const k = key(c.name);
+            if (!k || /^(unbenannt|eingefuegter text)$/.test(k)) continue;
+            if (!groups.has(k)) groups.set(k, []);
+            groups.get(k).push(c);
+        }
+        const out = new Map();
+        for (const g of groups.values()) {
+            for (const a of g) {
+                const others = g.filter(b => b !== a && (!a.birth || !b.birth || a.birth === b.birth)).map(b => b.id);
+                if (others.length) out.set(a.id, others);
+            }
+        }
+        return out;
+    }
+
     // --- Besoldungsreglement / Einreihungsplan einlesen ---
 
     const STOP_WORDS = new Set(['mit', 'ohne', 'und', 'oder', 'der', 'die', 'das', 'für', 'von', 'bzw', 'gemäss', 'stufe', 'mitarbeiter', 'mitarbeitende', 'mitarbeiterin', 'höherer', 'höhere', 'ausbildung', 'fachausbildung', 'funktion', 'zyklus', 'leitung']);
@@ -857,6 +1010,14 @@
         if (endAt > 0) body = body.slice(0, endAt);
         const lines = body.split('\n');
         const functions = [];
+        // Abschnittstitel («1.   Führungsebene 1 (Geschäftsleitung)» oder über drei Zeilen «Pädagogische … / 5. / Funktionen»)
+        const sections = {};
+        lines.forEach((l, i) => {
+            let m = /^\s*(\d{1,2})\.\s{2,}(\S.*)$/.exec(l);
+            if (m) { sections[m[1]] = m[2].split(/\s{3,}/)[0].trim(); return; }
+            m = /^\s*(\d{1,2})\.\s*$/.exec(l);
+            if (m) sections[m[1]] = [lines[i - 1], lines[i + 1]].map(x => (x || '').split(/\s{3,}/)[0].trim()).filter(x => x && !/^Nr\.?\s/.test(x)).join(' ');
+        });
         const joinPart = (a, b) => /[A-Za-zäöü]-$/.test(a) && /^[a-zäöü]/.test(b) ? a.slice(0, -1) + b : a + ' ' + b;
         const isNoise = l => !l.trim() || /^\s*\d{1,3}\s*$/.test(l) || /^\s*Nr\.?\s/.test(l);
         const isSection = (l, next) => /^\s*\d{1,2}\.(\s{2,}\S|\s*$)/.test(l) || (next !== undefined && /^\s*\d{1,2}\.\s*$/.test(next));
@@ -885,7 +1046,7 @@
             if (paren) { notes.unshift(paren[1].replace(/\)$/, '')); name = name.slice(0, paren.index); }
             const fnote = /(\d)\)/.exec(extra);
             if (fnote && footnotes[fnote[1]]) notes.push(footnotes[fnote[1]]);
-            functions.push(Object.assign({ nr: m[1], name: name.replace(/\s+/g, ' ').trim(), note: notes.join(' ').replace(/\s+/g, ' ').trim() }, fn));
+            functions.push(Object.assign({ nr: m[1], name: name.replace(/\s+/g, ' ').trim(), note: notes.join(' ').replace(/\s+/g, ' ').trim(), group: sections[m[1].split('.')[0]] || '' }, fn));
         }
         const up = /(\d{1,2})\.\s*und\s*(\d{1,2})\.\s*Dienstjahr/i.exec(t);
         return {
@@ -989,7 +1150,8 @@
                 fixedAnnual: f.fixedAnnual || null,
                 payments: reg.payments === 12 ? 12 : 13,
                 keywords: x.kws,
-                note: (f.note || '').trim()
+                note: (f.note || '').trim(),
+                group: f.group || ''
             });
         });
         const classAdjustments = Array.isArray(reg.adjustments) && reg.adjustments.length
@@ -1014,7 +1176,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -41,6 +41,8 @@
             <table class="r-facts">
                 <tr><th>Stelle / Vorlage</th><td>${esc(v.template.name)} (Zielberuf: ${esc(v.catName(v.template.target))}${v.baseText ? '; ' + esc(v.baseText) : ''})${v.suggestionText ? `<div class="r-sub">${esc(v.suggestionText)}</div>` : ''}</td></tr>
                 <tr><th>Geburtsdatum</th><td>${v.birth ? fmtDate(v.birth) : 'nicht angegeben'}</td></tr>
+                ${v.positionText ? `<tr><th>Offene Stelle</th><td>${esc(v.positionText)}</td></tr>` : ''}
+                <tr><th>Status</th><td>${esc(v.statusText)}</td></tr>
                 <tr><th>Auswertung</th><td>${esc(v.sourceText)}</td></tr>
                 ${v.salaryTableText ? `<tr><th>Gehaltstabelle</th><td>${esc(v.salaryTableText)}</td></tr>` : ''}
                 <tr><th>Einstellungen</th><td>${esc(v.settingsText)}</td></tr>
@@ -61,29 +63,85 @@
                 <tbody>${rows || '<tr><td colspan="8">Keine Einträge</td></tr>'}</tbody>
             </table>
             ${hasOverride ? `<p class="r-note">* Anrechnung manuell angepasst (${v.overrides} Eintr${v.overrides > 1 ? 'äge' : 'ag'}), abweichend von den Regeln der Vorlage.</p>` : ''}
-            ${v.hinweise ? `<p class="r-note"><b>Hinweis aus der KI-Auswertung:</b> ${esc(v.hinweise)}</p>` : ''}
-            <div class="r-sign">
-                <div><span>Geprüft durch</span></div>
-                <div><span>Datum</span></div>
-                <div><span>Unterschrift</span></div>
-            </div>
+            ${v.hinweise ? `<p class="r-note"><b>Hinweis:</b> ${esc(v.hinweise)}</p>` : ''}
+            ${signHtml(v)}
         </section>`;
     }
 
-    /** Druckt einen Bericht pro Person (views = Array von buildView-Ergebnissen). */
-    function print(views) {
+    /** Unterschriftenfeld; mit Prüfung/Freigabe aus der App vorausgefüllt. */
+    function signHtml(v) {
+        const rv = v.review || {};
+        const row = (label, value) => `<div class="r-sign">
+                <div><b>${esc(value || '')}</b><span>${label}</span></div>
+                <div><span>Datum</span></div>
+                <div><span>Unterschrift</span></div>
+            </div>`;
+        return row('Geprüft durch', rv.checked) + (rv.fourEyes || rv.approved ? row('Freigegeben durch', rv.approved) : '');
+    }
+
+    /** Lohnblatt: Lohnvorschlag für die Personalakte bzw. den Vertragsentwurf. */
+    function salaryPage(v) {
+        const r = v.result, pl = v.placement, sal = v.salary;
+        const facts = [
+            ['Person', v.name + (v.birth ? `, geb. ${fmtDate(v.birth)}` : '')],
+            ['Stelle', v.positionText || '–'],
+            ['Funktion', v.template.name + (v.baseText ? ` (${v.baseText})` : '')],
+            ['Pensum', v.pensumText],
+            ['Status', v.statusText]
+        ];
+        const amounts = sal ? [
+            ['Jahreslohn bei 100 %', v.chf(sal.full)],
+            [`Jahreslohn bei ${v.pensumText}`, v.chf(sal.base)],
+            ...sal.allowances.map(a => [`${a.label} (${v.chf(a.annual)} bei 100 %)`, v.chf(a.amount)]),
+            ...(sal.allowances.length ? [['Total pro Jahr', v.chf(sal.total)]] : []),
+            [`Monatslohn (${sal.payments} Auszahlungen)`, v.chf(sal.monthly)],
+            [`Monatslohn bei ${sal.payments === 12 ? 13 : 12} Auszahlungen`, v.chf(sal.monthlyOther)]
+        ] : [];
+        return `<section class="r-page">
+            <header class="r-head">
+                <div>
+                    <div class="r-kicker">Lohnblatt</div>
+                    <h1>${esc(v.name)}</h1>
+                </div>
+                <div class="r-meta">Erstellt am ${esc(v.created)}</div>
+            </header>
+            <table class="r-facts">${facts.map(([k, x]) => `<tr><th>${esc(k)}</th><td>${esc(x)}</td></tr>`).join('')}</table>
+            <h2 class="r-h2">Einreihung</h2>
+            <table class="r-facts">
+                <tr><th>Anrechenbare Erfahrung</th><td>${fmt(r.creditedYears)} Jahre (total ${fmt(r.totalYears)} J., davon ${fmt(r.targetYears)} J. im Zielberuf)</td></tr>
+                <tr><th>Lohnklasse / Stufe</th><td><b>${pl ? pl.fixed ? 'fixer Lohn gemäss Funktion' : `Lohnklasse ${pl.cls}, Stufe ${pl.stage}` : '–'}</b></td></tr>
+                <tr><th>Begründung</th><td>${esc(v.placementWhy)}</td></tr>
+                ${v.adjustmentText ? `<tr><th>Korrektur</th><td>${esc(v.adjustmentText)}</td></tr>` : ''}
+                ${v.openCorrections.length ? `<tr><th>Offene Vorschläge</th><td>${esc(v.openCorrections.join('; '))}</td></tr>` : ''}
+                ${v.salaryTableText ? `<tr><th>Gehaltstabelle</th><td>${esc(v.salaryTableText)}</td></tr>` : ''}
+            </table>
+            <h2 class="r-h2">Lohn</h2>
+            <table class="r-table r-amounts"><tbody>${amounts.map(([k, x], i) => `<tr class="${/^Total|^Monatslohn \(/.test(k) ? 'r-strong' : ''}"><td>${esc(k)}</td><td class="num">${esc(x)}</td></tr>`).join('') || '<tr><td>Kein Lohn berechnet (keine Gehaltstabelle)</td><td></td></tr>'}</tbody></table>
+            ${v.outlook.length ? `<h2 class="r-h2">Lohnentwicklung (ohne Teuerung)</h2>
+            <table class="r-table"><thead><tr><th>Jahr</th><th class="num">Erfahrungsjahre</th><th class="num">Lohnklasse</th><th class="num">Stufe</th><th class="num">Jahreslohn</th><th class="num">Monatslohn</th></tr></thead>
+                <tbody>${v.outlook.map(x => `<tr><td>${x.year}</td><td class="num">${x.years}</td><td class="num">${x.cls}</td><td class="num">${x.stage}</td><td class="num">${x.amount ? esc(v.chf(x.amount)) : '–'}</td><td class="num">${x.monthly ? esc(v.chf(x.monthly)) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
+            <p class="r-note">${esc(v.settingsText)}. Die Einreihung ist ein Vorschlag nach dem Besoldungsreglement und muss von der zuständigen Stelle bestätigt werden.</p>
+            ${signHtml(v)}
+        </section>`;
+    }
+
+    function printPages(html) {
         let area = document.getElementById('printArea');
         if (!area) {
             area = document.createElement('div');
             area.id = 'printArea';
             document.body.appendChild(area);
         }
-        area.innerHTML = views.map(page).join('');
+        area.innerHTML = html;
         document.body.classList.add('printing');
         const done = () => { document.body.classList.remove('printing'); area.innerHTML = ''; window.removeEventListener('afterprint', done); };
         window.addEventListener('afterprint', done);
         window.print();
     }
+    const printSalarySheet = v => printPages(salaryPage(v));
 
-    root.CVReport = { print, page };
+    /** Druckt einen Bericht pro Person (views = Array von buildView-Ergebnissen). */
+    function print(views) { printPages(views.map(page).join('')); }
+
+    root.CVReport = { print, page, printSalarySheet, salaryPage };
 })(typeof self !== 'undefined' ? self : this);

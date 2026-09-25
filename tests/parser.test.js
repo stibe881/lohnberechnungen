@@ -365,3 +365,46 @@ assert.strictEqual(P.classify('Koch, Altersheim Baar (Pensum 100%)', '', catsWor
 assert.strictEqual(P.classify('Koch', 'Altersheim Baar', catsWork).category, 'koch');
 assert.strictEqual(P.classify('Mitarbeiterin', 'Altersheim Baar', catsWork).category, 'betreuung');
 console.log('Funktion vor Arbeitgeber bestanden.');
+
+// Korrekturen vorschlagen
+const adjs = P.normalizeSettings(Object.assign({}, S, { classAdjustments: [
+    { id: 'minus1', label: 'fehlende Ausbildung', delta: -1, auto: { kind: 'missingQualification' } },
+    { id: 'ausland', label: 'Diplom Ausland', delta: -1, auto: { kind: 'foreignDiploma' } },
+    { id: 'fe2', label: 'FE2 Führungsausbildung', delta: 1, auto: { kind: 'leadershipTraining', prefix: '2.' } },
+    { id: 'fe2plus', label: 'FE2 + 15 J.', delta: 2, auto: { kind: 'leadershipTraining', minYears: 15, prefix: '2.' } }
+] })).classAdjustments;
+const tplSp = rules('sozial', { name: '5.1 Sozialpädagogik', keywords: ['sozialpädagog+hf', 'sozialpädagog+fh'] });
+const eduOk = [{ title: 'Studium Sozialpädagogik HF', details: 'HSL Luzern', category: '__zweitausbildung', start: '2014-01', end: '2016-12' }];
+const eduNo = [{ title: 'Kaufmann EFZ', details: 'Bank', category: '__ausbildung', start: '2005-01', end: '2008-12' }];
+assert.deepStrictEqual(P.suggestCorrections(eduOk, tplSp, adjs, null, today), []);
+assert.deepStrictEqual(P.suggestCorrections(eduNo, tplSp, adjs, null, today).map(x => x.id), ['minus1']);
+const eduDe = [{ title: 'Bachelor Soziale Arbeit FH', details: 'Hochschule München, Deutschland', category: '__ausbildung', start: '2010-01', end: '2013-12' }];
+assert.ok(P.suggestCorrections(eduDe, rules('sozial', { name: '5.1', keywords: ['soziale arbeit'] }), adjs, null, today).some(x => x.id === 'ausland'));
+const leadCv = [
+    { title: 'CAS Führung und Management', details: 'FHS St. Gallen', category: '__zweitausbildung', start: '2012-01', end: '2012-12' },
+    { title: 'Bereichsleiterin Wohnen', details: '', category: 'fuehrung', start: '2008-01', ongoing: true, include: true }
+];
+const tplAl = rules('fuehrung', { name: '2.1 Angebotsleitung', keywords: ['bereichsleit'] });
+const leadIds = list => list.map(x => x.id).filter(id => id.startsWith('fe2'));
+assert.deepStrictEqual(leadIds(P.suggestCorrections(leadCv, tplAl, adjs, null, today)), ['fe2plus']);   // 18 J. Führung → nur +2
+assert.deepStrictEqual(leadIds(P.suggestCorrections([leadCv[0], Object.assign({}, leadCv[1], { start: '2020-01' })], tplAl, adjs, null, today)), ['fe2']);
+assert.deepStrictEqual(leadIds(P.suggestCorrections(leadCv, rules('fuehrung', { name: '3.1 Teamleitung' }), adjs, null, today)), []); // nur Funktionen 2.x
+assert.deepStrictEqual(P.suggestCorrections(eduNo, tplSp, adjs, { qualificationMatches: true }, today), []); // Angabe von Claude
+// Zulagen
+const tplShp = rules('lehrperson', { allowances: [{ id: 'hp', label: 'Zulage heilpäd.', annual: 4042, autoKeywords: ['heilpädagog', 'hfh'] }] });
+assert.deepStrictEqual(P.suggestedAllowances(P.upgradeTemplate(tplShp), [{ title: 'Master Schulische Heilpädagogik', details: 'HfH', category: '__zweitausbildung' }]), ['hp']);
+assert.deepStrictEqual(P.suggestedAllowances(P.upgradeTemplate(tplShp), [{ title: 'Lehrdiplom Primarstufe', details: 'PH Zug', category: '__ausbildung' }]), []);
+// Lohnentwicklung
+const outTpl = rules('lehrperson', { classMin: 12, classMax: 14, classUpYears: [12, 24] });
+const outRows = P.salaryOutlook(10.4, outTpl, null, [{ id: 't', validFrom: null, classes: { 12: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 13: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20] } }], today, 3);
+assert.deepStrictEqual(outRows.map(r => [r.year, r.years, r.cls, r.stage, r.salary]), [[2026, 10, 12, 10, 10], [2027, 11, 12, 10, 10], [2028, 12, 13, 10, 20], [2029, 13, 13, 10, 20]]);
+// Doppelbewerbungen
+const dups = P.findDuplicates([{ id: 'a', name: 'Anna Muster', birth: '1990-05' }, { id: 'b', name: 'muster anna', birth: '1990-05' }, { id: 'c', name: 'Anna Muster', birth: '1985-01' }, { id: 'd', name: 'Peter Test', birth: '' }]);
+assert.deepStrictEqual([...dups.entries()], [['a', ['b']], ['b', ['a']]]);
+// Stellen und Aufbewahrung je Status
+const ns = P.normalizeSettings(Object.assign({}, S, { positions: [{ title: 'Sozialpädagogin 80 %', templateId: 't_sozial', pensum: 80 }], retentionByStatus: { abgesagt: 90, neu: '' }, fourEyes: true }));
+assert.strictEqual(ns.positions[0].pensum, 80);
+assert.strictEqual(ns.positions[0].status, 'offen');
+assert.deepStrictEqual(ns.retentionByStatus, { abgesagt: 90 });
+assert.strictEqual(ns.fourEyes, true);
+console.log('Korrekturen, Zulagen, Lohnentwicklung, Dubletten, Stellen bestanden.');
