@@ -554,12 +554,15 @@
             }
             const errors = [];
             const batch = [];
+            const refDocs = []; // erkannte Zeugnisse/Belege
             setProgress(0, sources.length, `Dateien werden gelesen (0 von ${sources.length}) …`);
             let read = 0;
             for (const src of sources) {
                 try {
                     const { text, pdfBase64 } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
                     setProgress(++read, sources.length, `Dateien werden gelesen (${read} von ${sources.length}) …`);
+                    // Zeugnisse und Belege im gleichen Stapel: nicht als Person anlegen, sondern der Person zuordnen
+                    if (src.file && looksLikeReference(text)) { refDocs.push({ name: src.file.name, text, pdfBase64 }); continue; }
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
                     if (src.file) { c.file = src.file; c.fileName = src.file.name; }
@@ -569,7 +572,15 @@
                     errors.push(src.name + ': ' + e.message);
                 }
             }
-            if (!batch.length) { setProgress(0, 0); setStatus(errors.join(' · '), true); return; }
+            if (!batch.length) {
+                setProgress(0, 0);
+                // Nur Zeugnisse hochgeladen: der gerade gewählten Person zuordnen
+                const sel = candidates.find(x => x.id === selectedId && !x.loading);
+                if (refDocs.length && sel) { await applyDocs(sel, refDocs, useAi); return; }
+                if (refDocs.length) toast(`${refDocs.length} Zeugnis${refDocs.length > 1 ? 'se' : ''} erkannt, aber keine Person gewählt – zuerst den Lebenslauf hochladen oder eine Person öffnen und dort «Zeugnisse hinzufügen».`, 'warn', { ms: 9000 });
+                if (errors.length) setStatus(errors.join(' · '), true);
+                return;
+            }
             candidates.push(...batch);
             batch.forEach(c => { c.step = STEP_TEXT.read; });
             selectedId = batch[0].id;
@@ -592,6 +603,9 @@
             setProgress(0, 0);
             if (errors.length) errors.forEach(e => toast(e, 'warn', { ms: 9000 }));
             toast(batch.length === 1 ? `${batch[0].name} ausgewertet.` : `${batch.length} Lebensläufe ausgewertet.`, 'ok');
+            // Zeugnisse aus dem gleichen Stapel: bei genau einem Lebenslauf direkt zuordnen
+            if (refDocs.length && batch.length === 1) await applyDocs(batch[0], refDocs, useAi);
+            else if (refDocs.length) toast(`${refDocs.length} Zeugnis${refDocs.length > 1 ? 'se' : ''} erkannt, aber ${batch.length} Lebensläufe – bitte bei der jeweiligen Person «Zeugnisse hinzufügen».`, 'warn', { ms: 9000 });
             $('#status').textContent = '';
             render();
             $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1226,49 +1240,58 @@
         await withBusy(async () => {
             let useAi = aiActive();
             if (useAi && !(await ensurePrivacyAck())) useAi = false;
-            const before = clone({ entries: c.entries, docs: c.docs || [] });
             setProgress(0, files.length, `Zeugnisse werden gelesen (0 von ${files.length}) …`);
             const docs = [];
-            const errors = [];
             let n = 0;
             for (const f of files) {
                 try {
                     const { text, pdfBase64 } = await readFile(f, useAi);
                     docs.push({ name: f.name, text, pdfBase64 });
-                } catch (e) { errors.push(`${f.name}: ${e.message}`); }
+                } catch (e) { toast(`${f.name}: ${e.message}`, 'warn', { ms: 9000 }); }
                 setProgress(++n, files.length, `Zeugnisse werden gelesen (${n} von ${files.length}) …`);
             }
-            let refs = [];
-            if (docs.length) {
-                if (useAi) {
-                    setProgress(n, files.length, 'Claude liest die Zeugnisse …');
-                    try {
-                        refs = await window.CVAi.readReferences(Object.assign({ model: ai.model, docs, entries: c.entries }, ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }));
-                    } catch (e) { errors.push('KI-Auswertung fehlgeschlagen (' + e.message + ') – Regeln verwendet'); refs = []; }
-                }
-                if (!refs.length) refs = docs.map(d => P.readReferenceText(d.text, d.name));
-            }
+            await applyDocs(c, docs, useAi);
             setProgress(0, 0);
-            const { changed, unmatched } = P.applyReferences(c.entries, refs);
-            // Belege ohne passende Stelle: Arbeitsstellen ergänzen, Diplome nur vermerken
-            let added = 0;
-            for (const ref of unmatched) {
-                if (ref.kind === 'diplom' || !ref.start) continue;
-                const cls = P.classify(ref.title || ref.employer, ref.employer, allCats());
-                c.entries.push({ id: 'e' + Math.random().toString(36).slice(2, 9), include: true, start: ref.start, end: ref.ongoing ? '' : ref.end, ongoing: ref.ongoing, title: ref.title || ref.employer || 'Stelle aus Zeugnis', details: [ref.employer, `aus ${DOC_KINDS[ref.kind] || 'Dokument'} «${ref.file}»`].filter(Boolean).join(' · '), category: cls.category || '__sonstige', pensum: ref.pensum || 100, pensumUnknown: !ref.pensum, factorOverride: null, raw: '', imprecise: false, verified: { file: ref.file, kind: ref.kind, fields: ['neu aus Zeugnis'], note: ref.note || '' } });
-                added++;
-            }
-            c.docs = (c.docs || []).concat(refs.map(r => ({ file: r.file, kind: r.kind, employer: r.employer, title: r.title, start: r.start, end: r.end, ongoing: r.ongoing, pensum: r.pensum, note: r.note, matched: !!changed.find(x => x.ref === r), at: new Date().toISOString() })));
-            render();
-            const parts = [];
-            if (changed.length) parts.push(`${changed.length} Stelle${changed.length > 1 ? 'n' : ''} belegt (${[...new Set(changed.flatMap(x => x.fields))].join(', ') || 'bestätigt'})`);
-            if (added) parts.push(`${added} Stelle${added > 1 ? 'n' : ''} ergänzt`);
-            const dipl = refs.filter(r => r.kind === 'diplom').length;
-            if (dipl) parts.push(`${dipl} Diplom${dipl > 1 ? 'e' : ''} vermerkt`);
-            errors.forEach(e => toast(e, 'warn', { ms: 9000 }));
-            if (!refs.length) { toast('In den Dateien wurden keine Angaben zu Anstellungen gefunden.', 'warn'); return; }
-            undoable(`${refs.length} Dokument${refs.length > 1 ? 'e' : ''} gelesen${useAi ? ' (Claude)' : ''}: ${parts.join(', ') || 'keine Änderung'}.`, () => { Object.assign(c, clone(before)); render(); });
         });
+    }
+    /** Sieht der Text nach einem Zeugnis, einer Bestätigung, einem Vertrag oder Diplom aus – und nicht nach einem Lebenslauf? */
+    function looksLikeReference(text) {
+        const head = String(text || '').slice(0, 1500).toLowerCase();
+        const all = String(text || '').toLowerCase();
+        const isRef = /arbeitszeugnis|zwischenzeugnis|arbeitsbest[äa]tigung|arbeitsvertrag|anstellungsvertrag|f[äa]higkeitszeugnis|\bdiplom\b|lehrabschluss|zertifikat|certificate of employment|reference letter/.test(head);
+        const isCv = /lebenslauf|curriculum vitae|\bcv\b|berufserfahrung|beruflicher werdegang|werdegang|berufliche t[äa]tigkeiten|ausbildung\s*\n|schulbildung|sprachen|hobbys|referenzen/.test(all) && /\d{4}\s*[–-]\s*(\d{4}|heute)/.test(all);
+        return isRef && !isCv;
+    }
+    /** Gelesene Dokumente auf eine Person anwenden (Zuordnung mit Claude oder Regeln), rückgängig. */
+    async function applyDocs(c, docs, useAi) {
+        if (!docs.length) return;
+        const before = clone({ entries: c.entries, docs: c.docs || [] });
+        let refs = [];
+        if (useAi) {
+            setProgress(1, 1, 'Claude liest die Zeugnisse …');
+            try {
+                refs = await window.CVAi.readReferences(Object.assign({ model: ai.model, docs, entries: c.entries }, ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }));
+            } catch (e) { toast('KI-Auswertung der Zeugnisse fehlgeschlagen (' + e.message + ') – Regeln verwendet', 'warn', { ms: 9000 }); refs = []; }
+        }
+        if (!refs.length) refs = docs.map(d => P.readReferenceText(d.text, d.name));
+        const { changed, unmatched } = P.applyReferences(c.entries, refs);
+        // Belege ohne passende Stelle: Arbeitsstellen ergänzen, Diplome nur vermerken
+        let added = 0;
+        for (const ref of unmatched) {
+            if (ref.kind === 'diplom' || !ref.start) continue;
+            const cls = P.classify(ref.title || ref.employer, ref.employer, allCats());
+            c.entries.push({ id: 'e' + Math.random().toString(36).slice(2, 9), include: true, start: ref.start, end: ref.ongoing ? '' : ref.end, ongoing: ref.ongoing, title: ref.title || ref.employer || 'Stelle aus Zeugnis', details: [ref.employer, `aus ${DOC_KINDS[ref.kind] || 'Dokument'} «${ref.file}»`].filter(Boolean).join(' · '), category: cls.category || '__sonstige', pensum: ref.pensum || 100, pensumUnknown: !ref.pensum, factorOverride: null, raw: '', imprecise: false, verified: { file: ref.file, kind: ref.kind, fields: ['neu aus Zeugnis'], note: ref.note || '' } });
+            added++;
+        }
+        c.docs = (c.docs || []).concat(refs.map(r => ({ file: r.file, kind: r.kind, employer: r.employer, title: r.title, start: r.start, end: r.end, ongoing: r.ongoing, pensum: r.pensum, note: r.note, matched: !!changed.find(x => x.ref === r), at: new Date().toISOString() })));
+        render();
+        const parts = [];
+        if (changed.length) parts.push(`${changed.length} Stelle${changed.length > 1 ? 'n' : ''} belegt (${[...new Set(changed.flatMap(x => x.fields))].join(', ') || 'bestätigt'})`);
+        if (added) parts.push(`${added} Stelle${added > 1 ? 'n' : ''} ergänzt`);
+        const dipl = refs.filter(r => r.kind === 'diplom').length;
+        if (dipl) parts.push(`${dipl} Diplom${dipl > 1 ? 'e' : ''} vermerkt`);
+        if (!refs.some(r => r.start || r.end)) { toast(`${c.name}: In den Zeugnissen wurden keine Zeiträume gefunden.`, 'warn'); return; }
+        undoable(`${c.name}: ${refs.length} Dokument${refs.length > 1 ? 'e' : ''} gelesen${useAi ? ' (Claude)' : ''} – ${parts.join(', ') || 'keine Änderung'}.`, () => { Object.assign(c, clone(before)); render(); });
     }
     $('#detail').addEventListener('change', e => {
         const inp = e.target.closest('input[data-docs]');
