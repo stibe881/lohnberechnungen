@@ -181,7 +181,7 @@
                 internship: rule(50), assistance: rule(50), family: rule(50), service: rule(50),
                 education: rule(0), secondEducation: rule(0)
             },
-            combine: 'max',        // 'max' = pro Monat zählt die höchste Anrechnung, 'sum' = summiert bis 100 %
+            combine: 'max',        // 'max' = pro Monat zählt die höchste Anrechnung, 'sum' = summiert bis 100 %, 'sumAll' = summiert ohne Begrenzung (Vorlage Personal)
             familyMaxYears: null,
             minAge: null,
             maxYears: null,
@@ -727,7 +727,15 @@
 
             list.sort((a, b) => b.w - a.w);
             let usedFamily = false;
-            if (tpl.combine === 'sum') {
+            if (tpl.combine === 'sumAll') {
+                // Wie die Berechnungsvorlage der Personalabteilung: alle gleichzeitigen Tätigkeiten addieren, auch über 100 % hinaus
+                for (const x of list) {
+                    if (x.w <= 0) continue;
+                    perEntry[x.i].credited += x.w;
+                    if (x.cat === '__familie') usedFamily = true;
+                    credited += x.w;
+                }
+            } else if (tpl.combine === 'sum') {
                 let left = 1;
                 for (const x of list) {
                     const take = Math.min(left, x.w);
@@ -1220,7 +1228,8 @@
                 id: x.tplId,
                 related: [...new Set(related.filter(r => r && r !== target))],
                 rules: mergeRules(reg.defaultRules, f.rules),
-                combine: reg.combine === 'max' || reg.combine === 'sum' ? reg.combine : 'max',
+                combine: ['max', 'sum', 'sumAll'].includes(reg.combine) ? reg.combine : 'max',
+
                 cutoff: reg.cutoff === 'yearEnd' ? 'yearEnd' : 'today',
                 classMin: f.classMin || null, classMax: f.classMax || f.classMin || null,
                 classUpYears: Array.isArray(reg.classUpYears) && reg.classUpYears.length ? reg.classUpYears : [12, 24],

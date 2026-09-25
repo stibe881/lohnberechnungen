@@ -586,7 +586,7 @@
         parts.push(`Militär-/Zivildienst: ${d('service')}`);
         parts.push(`Erstausbildung: ${d('education')}`);
         parts.push(`Zweitausbildung: ${d('secondEducation')}`);
-        parts.push(t.combine === 'sum' ? 'gleichzeitige Tätigkeiten werden addiert, max. 100 % pro Monat' : 'bei gleichzeitigen Tätigkeiten zählt die höchste Anrechnung');
+        parts.push(t.combine === 'sumAll' ? 'gleichzeitige Tätigkeiten werden ohne Begrenzung addiert (wie Vorlage Personal)' : t.combine === 'sum' ? 'gleichzeitige Tätigkeiten werden addiert, max. 100 % pro Monat' : 'bei gleichzeitigen Tätigkeiten zählt die höchste Anrechnung');
         if (t.cutoff === 'yearEnd') parts.push('Stichtag 31.12. des laufenden Jahres');
         if (t.minAge) parts.push(`angerechnet ab Alter ${t.minAge}`);
         if (t.maxYears) parts.push(`höchstens ${fmt(t.maxYears)} J.`);
@@ -1746,7 +1746,8 @@
             ['Name', c.name], ['Geburtsdatum', c.birth ? fmtDay(c.birth + '-01').slice(3) : ''], ['Funktion', t.name], ['Stichtag', fmtDay(cutoffIso)],
 
             ['Total Tätigkeiten in Jahren (Tage / 365.2425)', Math.round(total * 100) / 100],
-            ['Total in der App (monatsgenau, gleichzeitige Tätigkeiten max. 100 %)', Math.round(r.exactYears * 100) / 100, r.rounded || r.capped ? `gerundet/begrenzt: ${fmt(r.creditedYears)}` : ''],
+            [`Total in der App (monatsgenau, gleichzeitige Tätigkeiten ${t.combine === 'sumAll' ? 'addiert' : t.combine === 'sum' ? 'addiert bis 100 %' : 'höchste zählt'})`, Math.round(r.exactYears * 100) / 100, r.rounded || r.capped ? `gerundet/begrenzt: ${fmt(r.creditedYears)}` : ''],
+
             [],
             ['Zuordnung Tätigkeit', 'Beschreibung Tätigkeit', 'Von (1. Tag) Datum', 'Bis (letzter Tag) Datum', 'Pensum in %', 'Dauer in Tagen', 'Anrechnung in %', 'Σ DJ', 'Nicht mit berechnen', '# Fussnote']
         ];
@@ -1979,7 +1980,9 @@
                 <div class="grid-3">
                     <label class="field"><span>Gleichzeitige Tätigkeiten</span><select data-t="combine">
                         <option value="max"${t.combine === 'max' ? ' selected' : ''}>höchste Anrechnung zählt</option>
-                        <option value="sum"${t.combine === 'sum' ? ' selected' : ''}>addieren, max. 100 % pro Monat</option></select></label>
+                        <option value="sum"${t.combine === 'sum' ? ' selected' : ''}>addieren, max. 100 % pro Monat</option>
+                        <option value="sumAll"${t.combine === 'sumAll' ? ' selected' : ''}>addieren ohne Begrenzung (Vorlage Personal)</option></select></label>
+
                     <label class="field"><span>Stichtag</span><select data-t="cutoff">
                         <option value="today"${t.cutoff !== 'yearEnd' ? ' selected' : ''}>heute</option>
                         <option value="yearEnd"${t.cutoff === 'yearEnd' ? ' selected' : ''}>31.12. des laufenden Jahres</option></select></label>

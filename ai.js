@@ -321,7 +321,8 @@ const REGULATION_SCHEMA = {
                 fixed_annual: numOrNull, keywords: strArr, note: { type: 'string' }, rules: { anyOf: [RULES_SCHEMA, { type: 'null' }] }
             } } },
         default_rules: RULES_SCHEMA,
-        combine: { type: 'string', enum: ['max', 'sum'] },
+        combine: { type: 'string', enum: ['max', 'sum', 'sumAll'] },
+
         cutoff: { type: 'string', enum: ['today', 'yearEnd'] },
         class_up_years: { type: 'array', items: { type: 'integer' } },
         payments: { type: 'integer', enum: [12, 13] },

@@ -482,3 +482,15 @@ assert.ok(!byTitle('Pfarreirat').include && byTitle('Pfarreirat').ongoing && /Eh
 assert.ok(!byTitle('Leiterteam').include);
 assert.strictEqual(byTitle('Gymnasiale Matura').category, '__ausbildung');
 console.log('Lebenslauf-Muster (Pensum-Klammern, offene Zeiträume, Abschnitte, Ehrenamt) bestanden.');
+
+// Zweites Beispiel der Personalabteilung (Anstellung als Pädagogische Assistenz): gleichzeitige Tätigkeiten werden
+// ohne Begrenzung addiert (Familienzeit 33 % + Teilzeitjobs), fachfremde Arbeit zählt bei Assistenz 50/100 %. Total 17.80.
+const paRules = Object.assign({}, hrRules, { other: { mode: 'threshold', factor: 100, low: 50 } });
+const paTpl = P.upgradeTemplate({ target: '__assistenz', name: 'Pädagogische Assistenz', related: ['betreuung'], rules: paRules, combine: 'sumAll', cutoff: 'yearEnd', rounding: 'none' });
+const paE = (start, end, pensum, cat, include) => ({ id: start + end + cat, title: 't', details: '', category: cat, start, end, ongoing: false, include: include !== false, pensum, factorOverride: null });
+const paEntries = [paE('2005-08', '2008-07', 100, '__ausbildung', false), paE('2003-08', '2004-01', 80, 'betreuung'), paE('2004-10', '2005-07', 100, 'gastro'), paE('2009-08', '2010-07', 20, 'gastro'),
+    paE('2016-01', '2026-05', 30, 'gastro'), paE('2018-03', '2021-06', 40, 'gastro'), paE('2021-07', '2022-11', 80, 'gastro'), paE('2023-07', '2026-05', 70, 'gastro'),
+    paE('2026-06', '2026-12', 80, '__assistenz'), paE('2009-08', '2021-06', 100, '__familie'), paE('2022-12', '2023-06', 100, '__familie')];
+assert.strictEqual(P.compute(paEntries, paTpl, hrToday).exactYears.toFixed(2), '17.79');
+assert.ok(P.compute(paEntries, Object.assign({}, paTpl, { combine: 'sum' }), hrToday).exactYears < 17); // mit Begrenzung auf 100 % pro Monat deutlich weniger
+console.log('Berechnungsvorlage Personal, Beispiel 2 (Assistenz, Summe ohne Begrenzung) bestanden.');
