@@ -968,8 +968,6 @@
     function renderOverview() {
         $('#overview').hidden = candidates.length === 0;
         const shown = candidates.slice(-OVERVIEW_MAX).reverse();
-        $('#overviewMore').innerHTML = candidates.length > OVERVIEW_MAX
-            ? `Es werden die letzten ${OVERVIEW_MAX} von ${candidates.length} Bewerbenden angezeigt. <a href="#bewerbende">Alle Bewerbenden anzeigen und durchsuchen</a>` : '';
         $('#overviewBody').innerHTML = shown.map(c => {
             if (c.loading) {
                 return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
