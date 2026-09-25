@@ -4,7 +4,7 @@
    Hält den Anthropic API-Schlüssel auf dem Server, damit er nicht im Browser liegt.
    Einrichtung: config.sample.php nach config.php kopieren und ausfüllen (siehe README).
    Aufrufe:
-     GET  claude.php/status        -> {"configured": bool, "passwordRequired": bool}
+     GET  claude.php/status        -> {"configured": bool, "passwordRequired": bool, "problem": string|null}
      POST claude.php/v1/messages   -> wird an die Claude API weitergeleitet
    ============================================ */
 
@@ -20,11 +20,34 @@ function fail($status, $type, $message) {
 
 $configFile = __DIR__ . '/config.php';
 $config = is_file($configFile) ? require $configFile : null;
-$configured = is_array($config) && !empty($config['api_key']);
+$configured = is_array($config) && !empty($config['api_key']) && $config['api_key'] !== 'sk-ant-...';
+
+/** Grund, warum der Server nicht eingerichtet ist (ohne den Schlüssel preiszugeben). */
+function configProblem($configFile, $config) {
+    if (!is_file($configFile)) {
+        $similar = array_values(array_filter(scandir(__DIR__) ?: [], function ($f) {
+            return stripos($f, 'config') === 0 && $f !== 'config.sample.php' && $f !== 'config.php';
+        }));
+        if ($similar) return 'Die Datei heisst nicht genau «config.php», gefunden: ' . implode(', ', $similar) . '. Bitte umbenennen (Dateiendungen im Explorer/Finder einblenden).';
+        if (is_file(dirname(__DIR__) . '/config.php')) return 'config.php liegt im Hauptordner. Sie muss in den Ordner «api» (neben claude.php).';
+        $sample = @file_get_contents(__DIR__ . '/config.sample.php');
+        if ($sample !== false && strpos($sample, "'sk-ant-...'") === false) return 'Der Schlüssel wurde in config.sample.php eingetragen. Diese Datei bitte als «config.php» speichern bzw. umbenennen.';
+        return 'Im Ordner «api» gibt es keine Datei «config.php».';
+    }
+    if (!is_array($config)) return 'config.php gibt keine Einstellungen zurück. Die Datei muss mit «<?php return [» beginnen, siehe config.sample.php.';
+    if (!array_key_exists('api_key', $config)) return 'In config.php fehlt der Eintrag «api_key».';
+    if ($config['api_key'] === '' || $config['api_key'] === 'sk-ant-...') return 'In config.php ist bei «api_key» noch kein Schlüssel eingetragen.';
+    return null;
+}
 $path = $_SERVER['PATH_INFO'] ?? '';
 
 if ($path === '/status' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-    echo json_encode(['configured' => $configured, 'passwordRequired' => $configured && !empty($config['password'])]);
+    echo json_encode([
+        'configured' => $configured,
+        'passwordRequired' => $configured && !empty($config['password']),
+        'problem' => $configured ? null : configProblem($configFile, $config),
+        'keyFormatOk' => $configured ? strpos($config['api_key'], 'sk-ant-') === 0 : null,
+    ]);
     exit;
 }
 if (!$configured) fail(503, 'api_error', 'Der Server ist nicht eingerichtet (config.php fehlt).');

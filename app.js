@@ -666,8 +666,10 @@
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
         $('#serverStatus').innerHTML = server.configured
             ? '<span class="ok">✓ Server ist eingerichtet' + (server.passwordRequired ? ', Zugangspasswort erforderlich' : '') + '</span>'
+                + (server.passwordRequired ? '' : '<br><span class="warn">Achtung: kein Zugangspasswort gesetzt – bitte in config.php «password» eintragen.</span>')
+                + (server.keyFormatOk ? '' : '<br><span class="warn">Der Schlüssel beginnt nicht mit «sk-ant-» – bitte prüfen.</span>')
             : server.available
-                ? '<span class="warn">Server erreichbar, aber noch nicht eingerichtet (config.php fehlt, siehe Anleitung).</span>'
+                ? `<span class="warn">Server erreichbar, aber noch nicht eingerichtet: ${esc(server.problem || 'config.php fehlt, siehe Anleitung.')}</span>`
                 : '<span class="warn">Kein Server gefunden. Die Website braucht PHP-Hosting, siehe Anleitung.</span>';
         $('#aiServerFields').hidden = draftAi.mode !== 'server';
         $('#aiKeyFields').hidden = draftAi.mode !== 'key';

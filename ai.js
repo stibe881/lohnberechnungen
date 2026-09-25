@@ -198,7 +198,7 @@ export async function checkServer(serverUrl) {
         const res = await fetch(serverUrl + '/status', { cache: 'no-store' });
         if (!res.ok) return { available: false };
         const data = await res.json();
-        return { available: true, configured: !!data.configured, passwordRequired: !!data.passwordRequired };
+        return { available: true, configured: !!data.configured, passwordRequired: !!data.passwordRequired, problem: data.problem || '', keyFormatOk: data.keyFormatOk !== false };
     } catch (e) {
         return { available: false }; // z. B. Hosting ohne PHP
     }
