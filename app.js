@@ -592,7 +592,7 @@
                 <td class="num">${fmt(r.targetYears)}</td>
                 <td class="num">${fmt(r.otherYears)}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong></td>
-                <td class="num">${(pl => pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : '–')(placementFor(c, r))}</td>
+                <td class="num">${(pl => pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : `<button type="button" class="link-btn" data-edittpl="${esc(tplOf(c).id)}" title="Die Vorlage hat keine Lohnklassen">Lohnklassen fehlen</button>`)(placementFor(c, r))}</td>
                 <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Entfernen" aria-label="Entfernen">✕</button></td>
             </tr>`;
         }).join('');
@@ -674,6 +674,7 @@
                 <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
             ${!placementFor(c, r) && t.note ? `<div class="notice"><b>Hinweis zur Einreihung:</b> ${esc(t.note)}</div>` : ''}
+            ${!placementFor(c, r) ? `<div class="notice"><b>Keine Lohneinreihung:</b> Die Vorlage «${esc(t.name)}» hat keine Lohnklassen. Eine Vorlage des Einreihungsplans wählen oder bei dieser Vorlage «Lohnklasse von/bis» eintragen. <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Vorlage bearbeiten</button></div>` : ''}
             ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div></div>` : '')(placementFor(c, r))}
             <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
@@ -772,6 +773,8 @@
             render();
             return;
         }
+        const edit = e.target.closest('[data-edittpl]');
+        if (edit) { openSettings(edit.dataset.edittpl); return; }
         const row = e.target.closest('[data-select]');
         if (row) { selectedId = row.dataset.select; render(); }
     });
