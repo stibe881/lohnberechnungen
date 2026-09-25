@@ -342,3 +342,8 @@ assert.strictEqual(builtAi.templates[0].rules.family.factor, 33.33);
 assert.strictEqual(builtAi.templates[0].combine, 'sum');
 assert.strictEqual(builtAi.classAdjustments[0].delta, -1);
 console.log('Reglement einlesen bestanden.');
+
+// Umlaute ausgeschrieben
+assert.ok(P.keywordHit(' sozialpaedagogin hf ', 'sozialpädagog+hf'));
+assert.strictEqual(P.classify('Sozialpaedagogin', '', S.categories).category, 'sozial');
+console.log('ae/oe/ue bestanden.');

@@ -1,24 +1,33 @@
 <?php
 /* ============================================
-   Lebenslauf-Rechner — Auswertungen in der Datenbank
-   Speichert die ausgewerteten Personen (Name, erkannte Stellen, Text des Lebenslaufs, Einstellungen
-   der Auswertung), damit sie nach dem Neuladen noch da sind. Zugriff nur mit dem Zugangspasswort.
-   Die Tabelle wird beim ersten Aufruf automatisch angelegt.
+   Lebenslauf-Rechner — Bewerbende in der Datenbank
+   Speichert die ausgewerteten Personen (Auswertung, erkannter Text) und die Datei des Lebenslaufs,
+   damit sie nach dem Neuladen noch da sind. Zugriff nur mit dem Zugangspasswort.
+   Die Tabellen werden beim ersten Aufruf automatisch angelegt.
    Aufrufe:
-     GET    candidates.php?action=status  -> {"enabled", "keepDays", "problem"}
-     GET    candidates.php                -> {"candidates": [...]}              (Passwort nötig)
-     POST   candidates.php                -> Body {"candidate": {...}} speichern (Passwort nötig)
-     DELETE candidates.php?id=…           -> Person löschen                    (Passwort nötig)
-   Einträge, die länger als «keep_days» nicht geändert wurden, werden automatisch gelöscht.
+     GET    candidates.php?action=status        -> {"enabled", "keepDays", "problem"}
+     GET    candidates.php                      -> {"candidates": [...], "keepDays"}         (Passwort nötig)
+     POST   candidates.php                      -> Body {"candidate": {...}} speichern       (Passwort nötig)
+     DELETE candidates.php?id=…                 -> Person samt Datei löschen                  (Passwort nötig)
+     GET    candidates.php?action=file&id=…     -> Datei des Lebenslaufs                      (Passwort nötig)
+     POST   candidates.php?action=file&id=…     -> Datei speichern (Body = Datei, Header x-file-name)
+   Aufbewahrung: Personen, die länger als die eingestellte Anzahl Tage nicht geändert wurden, werden
+   samt Datei gelöscht. Die Frist kommt aus den zentralen Einstellungen («retentionDays»), sonst aus
+   «keep_days» in config.php (Standard 180, 0 = nie löschen).
    ============================================ */
 
-header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
 function fail($status, $message) {
     http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['error' => $message]);
+    exit;
+}
+function out($data) {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
     exit;
 }
 
@@ -29,8 +38,21 @@ $password = (string) ($config['password'] ?? '');
 $hasPassword = $password !== '' && $password !== 'ein-langes-zufaelliges-passwort';
 $db = $config['db'] ?? null;
 $hasDb = is_array($db) && (!empty($db['dsn']) || (!empty($db['host']) && !empty($db['name']) && !empty($db['user'])));
-$keepDays = max(0, (int) ($config['keep_days'] ?? 180));
 $table = preg_replace('/[^a-z0-9_]/i', '', $db['table'] ?? 'lr_candidates');
+$files = $table . '_files';
+$maxFileMb = max(1, (int) ($config['max_file_mb'] ?? 12));
+
+/** Aufbewahrung in Tagen: zentrale Einstellungen (in der App einstellbar) vor config.php. */
+function keepDays($config) {
+    $file = rtrim($config['data_dir'] ?? (__DIR__ . '/data'), '/') . '/settings.json';
+    if (is_file($file)) {
+        $store = json_decode((string) file_get_contents($file), true);
+        $days = $store['settings']['retentionDays'] ?? null;
+        if (is_numeric($days) && $days >= 0) return (int) $days;
+    }
+    return max(0, (int) ($config['keep_days'] ?? 180));
+}
+$keepDays = keepDays($config);
 
 function problem($configFile, $hasPassword, $hasDb) {
     if (!is_file($configFile)) return 'Im Ordner «api» gibt es keine Datei «config.php».';
@@ -42,23 +64,35 @@ function problem($configFile, $hasPassword, $hasDb) {
 function connect($db) {
     $dsn = !empty($db['dsn']) ? $db['dsn']
         : sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $db['host'], (int) ($db['port'] ?? 3306), $db['name']);
-    $pdo = new PDO($dsn, $db['user'] ?? null, $db['password'] ?? null, [
+    return new PDO($dsn, $db['user'] ?? null, $db['password'] ?? null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_TIMEOUT => 10,
     ]);
-    return $pdo;
 }
 
-function ensureTable($pdo, $table) {
+function ensureTables($pdo, $table, $files) {
     $mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
+    $engine = $mysql ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : '';
     $pdo->exec("CREATE TABLE IF NOT EXISTS $table (
         id VARCHAR(40) NOT NULL PRIMARY KEY,
         name VARCHAR(255) NOT NULL DEFAULT '',
         data " . ($mysql ? 'MEDIUMTEXT' : 'TEXT') . " NOT NULL,
         created_at DATETIME NOT NULL,
         updated_at DATETIME NOT NULL
-    )" . ($mysql ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : ''));
+    )$engine");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS $files (
+        id VARCHAR(40) NOT NULL PRIMARY KEY,
+        filename VARCHAR(255) NOT NULL DEFAULT '',
+        mime VARCHAR(100) NOT NULL DEFAULT '',
+        size INT NOT NULL DEFAULT 0,
+        content " . ($mysql ? 'LONGBLOB' : 'BLOB') . " NOT NULL,
+        created_at DATETIME NOT NULL
+    )$engine");
+}
+
+function validId($id) {
+    return is_string($id) && $id !== '' && strlen($id) <= 40 && preg_match('/^[A-Za-z0-9_-]+$/', $id);
 }
 
 $action = $_GET['action'] ?? '';
@@ -67,11 +101,10 @@ $method = $_SERVER['REQUEST_METHOD'];
 if ($action === 'status' && $method === 'GET') {
     $problem = problem($configFile, $hasPassword, $hasDb);
     if ($problem === null) {
-        try { ensureTable(connect($db), $table); }
+        try { ensureTables(connect($db), $table, $files); }
         catch (Exception $e) { $problem = 'Keine Verbindung zur Datenbank. Bitte die Angaben «db» in config.php prüfen.'; }
     }
-    echo json_encode(['enabled' => $problem === null, 'keepDays' => $keepDays, 'problem' => $problem]);
-    exit;
+    out(['enabled' => $problem === null, 'keepDays' => $keepDays, 'maxFileMb' => $maxFileMb, 'problem' => $problem]);
 }
 
 $problem = problem($configFile, $hasPassword, $hasDb);
@@ -84,35 +117,77 @@ if (!is_string($given) || !hash_equals($password, $given)) {
 
 try {
     $pdo = connect($db);
-    ensureTable($pdo, $table);
+    ensureTables($pdo, $table, $files);
 } catch (Exception $e) {
     fail(500, 'Keine Verbindung zur Datenbank. Bitte die Angaben «db» in config.php prüfen.');
 }
 $now = gmdate('Y-m-d H:i:s');
+$id = (string) ($_GET['id'] ?? '');
+
+// --- Datei des Lebenslaufs ---
+if ($action === 'file') {
+    if (!validId($id)) fail(400, 'Ungültige ID.');
+    if ($method === 'GET') {
+        $st = $pdo->prepare("SELECT filename, mime, content FROM $files WHERE id = ?");
+        $st->execute([$id]);
+        $f = $st->fetch();
+        if (!$f) fail(404, 'Zu dieser Person ist keine Datei gespeichert.');
+        $content = is_resource($f['content']) ? stream_get_contents($f['content']) : $f['content'];
+        header('Content-Type: ' . ($f['mime'] ?: 'application/octet-stream'));
+        header('Content-Disposition: inline; filename*=UTF-8\'\'' . rawurlencode($f['filename'] ?: 'lebenslauf'));
+        header('Content-Length: ' . strlen($content));
+        echo $content;
+        exit;
+    }
+    if ($method !== 'POST') fail(405, 'Nur GET und POST erlaubt.');
+    $max = $maxFileMb * 1024 * 1024;
+    $content = file_get_contents('php://input', false, null, 0, $max + 1);
+    if ($content === false || $content === '') fail(400, 'Die Datei ist leer.');
+    if (strlen($content) > $max) fail(413, "Die Datei ist zu gross (max. $maxFileMb MB).");
+    $name = rawurldecode((string) ($_SERVER['HTTP_X_FILE_NAME'] ?? 'lebenslauf'));
+    $name = function_exists('mb_substr') ? mb_substr($name, 0, 255) : substr($name, 0, 255);
+    $mime = substr(preg_replace('/[^a-z0-9.+\/-]/i', '', (string) ($_SERVER['CONTENT_TYPE'] ?? 'application/octet-stream')), 0, 100);
+    try {
+        $st = $pdo->prepare("REPLACE INTO $files (id, filename, mime, size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+        $st->bindValue(1, $id);
+        $st->bindValue(2, $name);
+        $st->bindValue(3, $mime);
+        $st->bindValue(4, strlen($content), PDO::PARAM_INT);
+        $st->bindValue(5, $content, PDO::PARAM_LOB);
+        $st->bindValue(6, $now);
+        $st->execute();
+    } catch (Exception $e) {
+        fail(500, 'Die Datei konnte nicht gespeichert werden (evtl. zu gross für die Datenbank).');
+    }
+    out(['saved' => $id, 'size' => strlen($content)]);
+}
 
 if ($method === 'GET') {
     if ($keepDays > 0) {
         $pdo->prepare("DELETE FROM $table WHERE updated_at < ?")->execute([gmdate('Y-m-d H:i:s', time() - $keepDays * 86400)]);
+        $pdo->exec("DELETE FROM $files WHERE id NOT IN (SELECT id FROM $table)");
     }
-    $rows = $pdo->query("SELECT id, data, created_at, updated_at FROM $table ORDER BY created_at")->fetchAll();
-    $out = [];
+    $rows = $pdo->query("SELECT c.id, c.data, c.created_at, c.updated_at, f.filename, f.size
+        FROM $table c LEFT JOIN $files f ON f.id = c.id ORDER BY c.created_at")->fetchAll();
+    $list = [];
     foreach ($rows as $r) {
         $c = json_decode($r['data'], true);
         if (!is_array($c)) continue;
         $c['id'] = $r['id'];
-        $c['savedAt'] = $r['updated_at'] . 'Z';
-        $out[] = $c;
+        $c['savedAt'] = str_replace(' ', 'T', $r['updated_at']) . 'Z';
+        if (empty($c['createdAt'])) $c['createdAt'] = str_replace(' ', 'T', $r['created_at']) . 'Z';
+        $c['hasFile'] = $r['filename'] !== null;
+        if ($r['filename'] !== null) { $c['fileName'] = $r['filename']; $c['fileSize'] = (int) $r['size']; }
+        $list[] = $c;
     }
-    echo json_encode(['candidates' => $out, 'keepDays' => $keepDays]);
-    exit;
+    out(['candidates' => $list, 'keepDays' => $keepDays]);
 }
 
 if ($method === 'DELETE') {
-    $id = (string) ($_GET['id'] ?? '');
-    if ($id === '') fail(400, 'Es fehlt die ID.');
+    if (!validId($id)) fail(400, 'Ungültige ID.');
     $pdo->prepare("DELETE FROM $table WHERE id = ?")->execute([$id]);
-    echo json_encode(['deleted' => $id]);
-    exit;
+    $pdo->prepare("DELETE FROM $files WHERE id = ?")->execute([$id]);
+    out(['deleted' => $id]);
 }
 
 if ($method !== 'POST') fail(405, 'Nur GET, POST und DELETE erlaubt.');
@@ -122,9 +197,9 @@ $body = file_get_contents('php://input', false, null, 0, $maxBytes + 1);
 if ($body === false || strlen($body) > $maxBytes) fail(413, 'Die Auswertung ist zu gross (max. 8 MB).');
 $data = json_decode($body, true);
 $c = $data['candidate'] ?? null;
-$id = is_array($c) ? (string) ($c['id'] ?? '') : '';
-if ($id === '' || strlen($id) > 40 || !preg_match('/^[A-Za-z0-9_-]+$/', $id)) fail(400, 'Ungültige Auswertung.');
-unset($c['pdfBase64'], $c['loading'], $c['savedAt']); // PDFs werden nicht gespeichert
+$cid = is_array($c) ? (string) ($c['id'] ?? '') : '';
+if (!validId($cid)) fail(400, 'Ungültige Auswertung.');
+unset($c['pdfBase64'], $c['loading'], $c['savedAt'], $c['file'], $c['fileSize']); // Dateien werden separat gespeichert
 $json = json_encode($c, JSON_UNESCAPED_UNICODE);
 $name = (string) ($c['name'] ?? '');
 $name = function_exists('mb_substr') ? mb_substr($name, 0, 255) : substr($name, 0, 255);
@@ -136,5 +211,5 @@ if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
     $sql = "INSERT INTO $table (id, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET name = excluded.name, data = excluded.data, updated_at = excluded.updated_at";
 }
-$pdo->prepare($sql)->execute([$id, $name, $json, $now, $now]);
-echo json_encode(['saved' => $id, 'savedAt' => $now . 'Z']);
+$pdo->prepare($sql)->execute([$cid, $name, $json, $now, $now]);
+out(['saved' => $cid, 'savedAt' => str_replace(' ', 'T', $now) . 'Z']);

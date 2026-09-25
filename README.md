@@ -18,7 +18,8 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Bericht (PDF)** pro Person oder für alle: Regeln, Rechenweg, Zeitstrahl, Stellenliste und Unterschriftenfeld «Geprüft durch». Hält fest, womit gerechnet wurde: verwendete Gehaltstabelle mit Gültigkeit, Version der zentralen Einstellungen und Zeitpunkt der Berechnung. Öffnet den Druckdialog, dort «Als PDF speichern» wählen.
 - **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «manuell» (Stift-Symbol) markiert, im Bericht vermerkt und im CSV gezählt.
 - **Zentrale Einstellungen:** Vorlagen, Berufe und Gehaltstabellen liegen auf dem Server, alle Nutzenden rechnen mit demselben Stand (siehe «Server einrichten»).
-- **Auswertungen speichern:** Mit Datenbank (MySQL/MariaDB) bleiben ausgewertete Personen nach dem Neuladen erhalten (siehe «Datenbank»).
+- **Bewerbende:** Mit Datenbank (MySQL/MariaDB) bleiben ausgewertete Personen samt Lebenslauf-Datei erhalten. Die Seite «Bewerbende» (Button oben) listet alle mit Suche, zeigt Auswertung und Lebenslauf und bei jeder Person, wie viele Tage sie noch aufbewahrt wird. Die Startseite zeigt nur die letzten 5 (siehe «Datenbank»).
+- **Aus Dokumenten erstellen:** Besoldungsreglement und Gehaltstabelle einlesen – die App erstellt daraus Vorlagen mit Lohnklassen, Aufstiegen und Stichtag; mit Claude auch Berufe, Stichwörter und Anrechnungsregeln.
 - **Funktion automatisch vorschlagen:** Aus Ausbildung und Tätigkeiten im Lebenslauf schlägt die App die passende Vorlage (Funktion des Einreihungsplans) vor – mit Claude oder über Stichwörter pro Vorlage – samt Begründung und Alternativen.
 - **CSV-Export** der Übersicht und aller Stellen.
 
@@ -50,9 +51,10 @@ Schutzmassnahmen in `api/claude.php`: Zugangspasswort (mit Verzögerung bei fals
 
 Mit `api/candidates.php` werden die ausgewerteten Personen in einer MySQL-/MariaDB-Datenbank gespeichert. In `config.php` den Block `db` mit Server, Datenbankname, Benutzer und Passwort ausfüllen (siehe `config.sample.php`); die Tabelle `lr_candidates` wird beim ersten Aufruf automatisch angelegt.
 
-- Gespeichert werden Name, Geburtsdatum, erkannter Text, Stellen, gewählte Vorlage und Anpassungen – **keine PDF-Dateien**. «Neu auswerten» arbeitet nach dem Neuladen mit dem gespeicherten Text.
-- Änderungen werden automatisch gespeichert. Alle mit Zugangspasswort sehen dieselben Personen; das Kreuz-Symbol in der Übersicht löscht eine Person endgültig.
-- Personen, die `keep_days` Tage (Standard 180) nicht geändert wurden, werden automatisch gelöscht. Die Frist an die internen Vorgaben zur Aufbewahrung von Bewerbungsunterlagen anpassen.
+- Gespeichert werden die Lebenslauf-Datei (PDF/Word, bis 12 MB, `max_file_mb`), Name, Geburtsdatum, erkannter Text, Stellen, gewählte Vorlage und Anpassungen (Tabellen `lr_candidates` und `lr_candidates_files`). «Neu auswerten» gibt die gespeicherte PDF-Datei wieder an Claude.
+- Änderungen werden automatisch gespeichert. Alle mit Zugangspasswort sehen dieselben Personen; das Kreuz-Symbol löscht eine Person samt Datei endgültig.
+- **Aufbewahrung:** Personen werden so viele Tage nach der letzten Änderung samt Lebenslauf gelöscht, wie unter «Einstellungen → Server und Zugang → Aufbewahrung der Bewerbenden» eingestellt (gilt für alle, wenn die Einstellungen zentral gespeichert sind; 0 = nie). Ohne Angabe gilt `keep_days` aus `config.php` (Standard 180). Die Seite «Bewerbende» zeigt pro Person, wie viele Tage sie noch aufbewahrt wird. Die Frist an die internen Vorgaben zur Aufbewahrung von Bewerbungsunterlagen anpassen.
+- Die Datenbank muss Dateien in dieser Grösse annehmen (`max_allowed_packet`, bei den meisten Hostern 16 MB oder mehr).
 - Zugangsdaten der Datenbank gehören nur in `config.php` auf dem Server, nie ins Repository.
 
 ### Zentrale Einstellungen
@@ -121,7 +123,7 @@ Einstellungen aus früheren Versionen werden beim Öffnen automatisch übernomme
 
 ## Datenschutz
 
-Die Dateien werden im Browser ausgelesen. Ohne KI-Auswertung und ohne Datenbank werden sie nirgends hochgeladen oder gespeichert; nach dem Neuladen der Seite sind die Lebensläufe weg, nur die Einstellungen bleiben erhalten. Mit Datenbank werden erkannter Text und Auswertung (ohne PDF) auf eurem Server gespeichert und nach `keep_days` Tagen gelöscht.
+Die Dateien werden im Browser ausgelesen. Ohne KI-Auswertung und ohne Datenbank werden sie nirgends hochgeladen oder gespeichert; nach dem Neuladen der Seite sind die Lebensläufe weg, nur die Einstellungen bleiben erhalten. Mit Datenbank werden Lebenslauf-Datei, erkannter Text und Auswertung auf eurem Server gespeichert und nach der eingestellten Aufbewahrungsfrist gelöscht.
 
 ## Grenzen
 

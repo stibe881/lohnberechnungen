@@ -14,6 +14,7 @@
     const CANDIDATES_URL = new URL('api/candidates.php', location.href).href;
     const SHARED_KEY = 'cvrechner.shared.v1'; // Version der zuletzt geladenen/gespeicherten zentralen Einstellungen
     const CONCURRENCY = 3; // so viele Lebensläufe wertet Claude gleichzeitig aus
+    const OVERVIEW_MAX = 5; // so viele Personen zeigt die Übersicht auf der Startseite
 
     if (window.pdfjsLib) {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -67,7 +68,11 @@
         lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
         pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
         x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
-        check: '<path d="M20 6 9 17l-5-5"/>'
+        check: '<path d="M20 6 9 17l-5-5"/>',
+        clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+        file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+        download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+        external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
     };
     const icon = (name, label) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${ICONS[name]}</svg>`;
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -317,6 +322,10 @@
             adjustmentId: '',
             newPensum: 100,
             entries: [],
+            createdAt: new Date().toISOString(),
+            file: null,        // Originaldatei (nur im Speicher, bis sie in der Datenbank liegt)
+            hasFile: false,    // Datei liegt in der Datenbank
+            fileName: '',
             loading: true
         };
     }
@@ -371,6 +380,7 @@
                     const { text, pdfBase64 } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
+                    if (src.file) { c.file = src.file; c.fileName = src.file.name; }
                     batch.push(c);
                 } catch (e) {
                     errors.push(src.name + ': ' + e.message);
@@ -498,19 +508,137 @@
             : ai.enabled
                 ? icon('alert') + ' KI-Auswertung ist eingeschaltet, aber nicht eingerichtet (Einstellungen prüfen). Es wird mit den Regeln gerechnet.'
                 : storeActive() ? icon('lock') + ' Lebensläufe werden in diesem Browser ausgelesen und nicht an Claude gesendet.' : icon('lock') + ' Dateien werden nur lokal in diesem Browser verarbeitet und nirgends hochgeladen.';
-        if (storeActive()) $('#privacy').innerHTML += `<br>${icon('database')} Auswertungen (erkannter Text und Ergebnis, ohne PDF-Dateien) werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
+        if (storeActive()) $('#privacy').innerHTML += `<br>${icon('database')} Lebensläufe und Auswertungen werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
             + (store.error ? `<br><span class="warn store-warn">${icon('alert')} ${esc(store.error)}</span>` : '');
         else if (store.available) $('#privacy').innerHTML += `<br><span class="warn store-warn">${icon('alert')} Personen werden nicht gespeichert und sind nach dem Neuladen weg: ${esc(storeReason())}</span>`;
         renderOverview();
         renderDetail();
+        if (view === 'applicants') { renderApplicants(); renderCv(); }
         scheduleSave();
+    }
+
+    // --- Seite «Bewerbende» ---
+    let view = 'main';
+    const fileUrls = new Map(); // Objekt-URLs der Lebenslauf-Dateien (pro Person)
+    let cvShownId = null;
+    const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-CH') : '–';
+
+    /** Wechselt zwischen Startseite und «Bewerbende» (#bewerbende); die Personenansicht wandert mit. */
+    function showView() {
+        view = location.hash === '#bewerbende' ? 'applicants' : 'main';
+        $('#viewMain').hidden = view !== 'main';
+        $('#viewApplicants').hidden = view !== 'applicants';
+        $('#openApplicants').classList.toggle('active', view === 'applicants');
+        const target = view === 'applicants' ? $('#applicantDetail') : $('#viewMain');
+        if (detail.parentNode !== target) target.appendChild(detail);
+        if (view === 'applicants') { cvShownId = null; if (!candidates.some(c => c.id === selectedId)) selectedId = null; }
+        render();
+        window.scrollTo(0, 0);
+    }
+
+    /** Wie lange eine Person noch aufbewahrt wird (Tage bis zur Löschung). */
+    function retentionBadge(c) {
+        if (!savedJson.has(c.id)) return `<span class="badge" title="Nur in diesem Browser – nach dem Neuladen weg">nicht gespeichert</span>`;
+        if (!store.keepDays) return `<span class="badge badge-info" title="Wird nicht automatisch gelöscht">unbefristet</span>`;
+        const until = (c.savedAt ? Date.parse(c.savedAt) : Date.now()) + store.keepDays * 864e5;
+        const left = Math.ceil((until - Date.now()) / 864e5);
+        const title = `Wird am ${new Date(until).toLocaleDateString('de-CH')} endgültig gelöscht (${store.keepDays} Tage nach der letzten Änderung)`;
+        return `<span class="badge ${left <= 14 ? '' : 'badge-info'}" title="${esc(title)}">${icon(left <= 14 ? 'alert' : 'clock')} ${left <= 0 ? 'wird gelöscht' : `noch ${left} Tag${left === 1 ? '' : 'e'}`}</span>`;
+    }
+
+    function renderApplicants() {
+        const terms = $('#applicantSearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const hay = c => [c.name, tplOf(c).name, c.fileName, c.hinweise, c.birth, ...(c.entries || []).map(e => e.title + ' ' + e.details), c.text].join(' ').toLowerCase();
+        const list = candidates.slice().reverse().filter(c => terms.every(t => hay(c).includes(t)));
+        $('#applicantsInfo').innerHTML = (terms.length ? `${list.length} von ${candidates.length} Bewerbenden gefunden.` : `${candidates.length} Bewerbende, neueste zuerst.`)
+            + (storeActive() ? store.keepDays ? ` Gespeicherte Personen werden ${store.keepDays} Tage nach der letzten Änderung samt Lebenslauf gelöscht.` : ''
+                : ` <span class="warn">${icon('alert')} Personen werden nicht gespeichert: ${esc(storeReason())}</span>`);
+        $('#applicantsBody').innerHTML = list.length ? list.map(c => {
+            if (c.loading) return `<tr data-select="${c.id}"><td><strong>${esc(c.name)}</strong></td><td colspan="6" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td></tr>`;
+            const r = computeFor(c), pl = placementFor(c, r), n = overrideCount(c);
+            return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
+                <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ` <span class="mini-ai" title="ausgewertet mit Claude">${icon('sparkles', 'ausgewertet mit Claude')}</span>` : ''}${n ? ` <span class="badge badge-manual">${icon('pencil')} ${n} manuell</span>` : ''}
+                    ${c.hasFile || c.file ? `<div class="details">${icon('file')} ${esc(c.fileName || 'Lebenslauf')}</div>` : ''}</td>
+                <td>${esc(tplOf(c).name)}</td>
+                <td class="num"><strong>${fmt(r.creditedYears)}</strong> J.</td>
+                <td class="num">${pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : '–'}</td>
+                <td>${fmtDate(c.createdAt)}</td>
+                <td>${retentionBadge(c)}</td>
+                <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Löschen" aria-label="Löschen">${icon('x')}</button></td>
+            </tr>`;
+        }).join('') : `<tr><td colspan="7" class="empty">${candidates.length ? 'Keine Bewerbenden gefunden.' : 'Noch keine Bewerbenden ausgewertet.'}</td></tr>`;
+    }
+
+    /** Datei des Lebenslaufs als Objekt-URL (aus dem Speicher oder aus der Datenbank). */
+    async function fileUrlOf(c) {
+        if (fileUrls.has(c.id)) return fileUrls.get(c.id);
+        let blob = c.file;
+        if (!blob && c.hasFile) {
+            const res = await fetch(CANDIDATES_URL + '?action=file&id=' + encodeURIComponent(c.id), { cache: 'no-store', headers: { 'x-app-password': ai.password || '' } });
+            if (!res.ok) throw new Error(res.status === 404 ? 'Datei nicht gefunden' : `Fehler ${res.status}`);
+            blob = await res.blob();
+        }
+        if (!blob) return null;
+        const url = URL.createObjectURL(blob);
+        fileUrls.set(c.id, url);
+        return url;
+    }
+
+    /** Zeichnet alle Seiten eines PDFs in voller Breite (funktioniert in jedem Browser, auch ohne PDF-Viewer). */
+    async function renderPdfPages(buf, box, stillWanted) {
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const ratio = window.devicePixelRatio || 1;
+        for (let n = 1; n <= pdf.numPages; n++) {
+            if (!stillWanted() || !box.isConnected) return;
+            const page = await pdf.getPage(n);
+            const base = page.getViewport({ scale: 1 });
+            const vp = page.getViewport({ scale: Math.max(1, (box.clientWidth || 800) / base.width) * ratio });
+            const canvas = document.createElement('canvas');
+            canvas.width = vp.width;
+            canvas.height = vp.height;
+            canvas.setAttribute('aria-label', `Seite ${n} von ${pdf.numPages}`);
+            box.appendChild(canvas);
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        }
+    }
+
+    /** Zeigt den Lebenslauf der gewählten Person (PDF als Seiten, sonst Download und erkannter Text). */
+    async function renderCv() {
+        const c = view === 'applicants' ? candidates.find(x => x.id === selectedId) : null;
+        $('#cvCard').hidden = !c;
+        if (!c || c.id === cvShownId) return;
+        cvShownId = c.id;
+        const textHtml = c.text && c.text.trim() ? `<details class="rawtext" ${c.hasFile || c.file ? '' : 'open'}><summary>Erkannter Text</summary><pre>${esc(c.text)}</pre></details>` : '';
+        const isPdf = /\.pdf$/i.test(c.fileName || '') || (c.file && c.file.type === 'application/pdf');
+        $('#cvActions').innerHTML = '';
+        if (!c.hasFile && !c.file) {
+            $('#cvViewer').innerHTML = `<p class="hint">Keine Datei gespeichert (Text eingefügt oder vor dem Speichern der Dateien ausgewertet).</p>${textHtml}`;
+            return;
+        }
+        $('#cvViewer').innerHTML = '<p class="hint"><span class="spinner"></span> Lebenslauf wird geladen …</p>';
+        try {
+            const url = await fileUrlOf(c);
+            if (cvShownId !== c.id) return; // inzwischen andere Person gewählt
+            $('#cvActions').innerHTML = `<a class="btn btn-ghost btn-sm" href="${url}" download="${esc(c.fileName || 'lebenslauf')}">${icon('download')} Herunterladen</a>`
+                + (isPdf ? `<a class="btn btn-ghost btn-sm" href="${url}" target="_blank" rel="noopener">${icon('external')} In neuem Tab öffnen</a>` : '');
+            if (isPdf && window.pdfjsLib) {
+                $('#cvViewer').innerHTML = `<div class="cv-pages" aria-label="Lebenslauf von ${esc(c.name)}"></div>${textHtml}`;
+                await renderPdfPages(await (await fetch(url)).arrayBuffer(), $('#cvViewer .cv-pages'), () => cvShownId === c.id);
+            } else if (isPdf) {
+                $('#cvViewer').innerHTML = `<iframe class="cv-frame" src="${url}" title="Lebenslauf von ${esc(c.name)}"></iframe>${textHtml}`;
+            } else {
+                $('#cvViewer').innerHTML = `<p class="hint">Word-Dateien lassen sich im Browser nicht anzeigen – bitte herunterladen. Unten steht der erkannte Text.</p>${textHtml}`;
+            }
+        } catch (err) {
+            if (cvShownId === c.id) $('#cvViewer').innerHTML = `<p class="hint warn">Lebenslauf konnte nicht geladen werden: ${esc(err.message)}</p>${textHtml}`;
+        }
     }
 
     // --- Auswertungen in der Datenbank (api/candidates.php) ---
     let store = { available: false, enabled: false, keepDays: 0, problem: '', error: '' };
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
-        'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError'];
+        'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -532,7 +660,7 @@
         try {
             const res = await fetch(CANDIDATES_URL + '?action=status', { cache: 'no-store' });
             const d = res.ok ? await res.json() : null;
-            store = d ? Object.assign(store, { available: true, enabled: !!d.enabled, keepDays: d.keepDays || 0, problem: d.problem || '' }) : Object.assign(store, { available: false, enabled: false });
+            store = d ? Object.assign(store, { available: true, enabled: !!d.enabled, keepDays: d.keepDays || 0, maxFileMb: d.maxFileMb || 12, problem: d.problem || '' }) : Object.assign(store, { available: false, enabled: false });
         } catch (e) {
             store.available = store.enabled = false;
         }
@@ -561,6 +689,23 @@
             return 0;
         }
     }
+    /** Speichert die Datei des Lebenslaufs (PDF/Word) in der Datenbank. */
+    async function uploadFile(c) {
+        const maxMb = store.maxFileMb || 12;
+        if (c.file.size > maxMb * 1024 * 1024) {
+            c.fileError = `Datei grösser als ${maxMb} MB – nur die Auswertung wird gespeichert`;
+            setStatus(`${c.name}: ${c.fileError}.`, true);
+            return;
+        }
+        const res = await fetch(CANDIDATES_URL + '?action=file&id=' + encodeURIComponent(c.id), {
+            method: 'POST', cache: 'no-store', body: c.file,
+            headers: { 'x-app-password': ai.password || '', 'content-type': c.file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(c.file.name) }
+        });
+        let data = {};
+        try { data = await res.json(); } catch (e) { /* keine JSON-Antwort */ }
+        if (!res.ok) { c.fileError = data.error || `Fehler ${res.status}`; setStatus(`${c.name}: Lebenslauf-Datei nicht gespeichert (${c.fileError}).`, true); return; }
+        c.hasFile = true;
+    }
     let saveTimer = null, saving = false;
     /** Speichert geänderte Personen kurz nach der letzten Änderung. */
     function scheduleSave() {
@@ -573,10 +718,12 @@
         saving = true;
         try {
             for (const c of candidates.filter(x => !x.loading)) {
+                if (c.file && !c.hasFile && !c.fileError) await uploadFile(c);
                 const json = persistable(c);
                 if (savedJson.get(c.id) === json) continue;
-                await storeRequest('POST', '', { candidate: JSON.parse(json) });
+                const res = await storeRequest('POST', '', { candidate: JSON.parse(json) });
                 savedJson.set(c.id, json);
+                c.savedAt = res.savedAt;
             }
             if (store.error) { store.error = ''; setStatus('Auswertungen wieder gespeichert.'); }
         } catch (e) {
@@ -590,7 +737,10 @@
 
     function renderOverview() {
         $('#overview').hidden = candidates.length === 0;
-        $('#overviewBody').innerHTML = candidates.map(c => {
+        const shown = candidates.slice(-OVERVIEW_MAX).reverse();
+        $('#overviewMore').innerHTML = candidates.length > OVERVIEW_MAX
+            ? `Es werden die letzten ${OVERVIEW_MAX} von ${candidates.length} Bewerbenden angezeigt. <a href="#bewerbende">Alle Bewerbenden anzeigen und durchsuchen</a>` : '';
+        $('#overviewBody').innerHTML = shown.map(c => {
             if (c.loading) {
                 return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
                     <td><strong>${esc(c.name)}</strong></td><td>${esc(tplOf(c).name)}</td>
@@ -768,30 +918,32 @@
 
     $('#exampleBtn').addEventListener('click', () => processSources([{ name: 'Beispiel Anna Muster', text: EXAMPLE }]));
 
+    /** Person entfernen; gespeicherte Personen werden nach Rückfrage auch in der Datenbank gelöscht. */
+    function removeCandidate(id) {
+        const i = candidates.findIndex(c => c.id === id);
+        if (i < 0) return;
+        if (savedJson.has(id)) {
+            if (!confirm(`«${candidates[i].name}» endgültig löschen? Auswertung und Lebenslauf werden auch aus der Datenbank entfernt.`)) return;
+            storeRequest('DELETE', '?id=' + encodeURIComponent(id)).then(() => savedJson.delete(id))
+                .catch(err => setStatus('Konnte nicht aus der Datenbank gelöscht werden: ' + err.message, true));
+        }
+        candidates.splice(i, 1);
+        if (fileUrls.has(id)) { URL.revokeObjectURL(fileUrls.get(id)); fileUrls.delete(id); }
+        if (selectedId === id) selectedId = view === 'main' ? candidates[candidates.length - 1]?.id || null : null;
+        render();
+    }
+
     // --- Events: Übersicht ---
     $('#overviewBody').addEventListener('click', e => {
         const rm = e.target.closest('[data-remove]');
-        if (rm) {
-            const i = candidates.findIndex(c => c.id === rm.dataset.remove);
-            if (i < 0) return;
-            if (savedJson.has(candidates[i].id)) {
-                if (!confirm(`«${candidates[i].name}» endgültig löschen? Die Auswertung wird auch aus der Datenbank entfernt.`)) return;
-                const id = candidates[i].id;
-                storeRequest('DELETE', '?id=' + encodeURIComponent(id)).then(() => savedJson.delete(id))
-                    .catch(err => setStatus('Konnte nicht aus der Datenbank gelöscht werden: ' + err.message, true));
-            }
-            candidates.splice(i, 1);
-            if (selectedId === rm.dataset.remove) selectedId = candidates[0]?.id || null;
-            render();
-            return;
-        }
+        if (rm) { removeCandidate(rm.dataset.remove); return; }
         const edit = e.target.closest('[data-edittpl]');
         if (edit) { openSettings(edit.dataset.edittpl); return; }
         const row = e.target.closest('[data-select]');
         if (row) { selectedId = row.dataset.select; render(); }
     });
     $('#reportAll').addEventListener('click', () => {
-        const ready = candidates.filter(c => !c.loading);
+        const ready = candidates.slice(-OVERVIEW_MAX).reverse().filter(c => !c.loading);
         if (ready.length) CVReport.print(ready.map(buildView));
     });
 
@@ -857,6 +1009,13 @@
             if (!confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) return;
             withBusy(async () => {
                 let useAi = aiActive() && (await ensurePrivacyAck());
+                // Gespeicherte PDF-Datei wieder an Claude geben (liest auch Bilder und eingescannte Seiten)
+                if (useAi && !c.pdfBase64 && !ai.textOnly && /\.pdf$/i.test(c.fileName || '')) {
+                    try {
+                        const blob = c.file || await (await fetch(await fileUrlOf(c))).blob();
+                        c.pdfBase64 = toBase64(await blob.arrayBuffer());
+                    } catch (e) { /* dann mit dem erkannten Text */ }
+                }
                 if (useAi && !c.pdfBase64 && !c.text.trim()) useAi = false; // nichts zum Senden vorhanden
                 setStatus(useAi ? 'Claude wertet ' + c.name + ' neu aus …' : '');
                 c.loading = true;
@@ -924,7 +1083,7 @@
         $('#storeStatus').innerHTML = !store.available ? '<span class="warn">Keine Datenbank-Anbindung gefunden (braucht PHP-Hosting und api/candidates.php). Personen sind nach dem Neuladen weg.</span>'
             : !store.enabled ? `<span class="warn">${esc(store.problem || 'Datenbank ist nicht eingerichtet.')}</span>`
             : draftAi.storeCandidates === false ? 'Personen werden nicht gespeichert und sind nach dem Neuladen weg.'
-            : `<span class="ok">${icon('check')} Datenbank verbunden</span>${store.keepDays ? ` – Personen ohne Änderung werden nach ${store.keepDays} Tagen gelöscht` : ''}. PDF-Dateien werden nicht gespeichert, nur der erkannte Text und die Auswertung.`
+            : `<span class="ok">${icon('check')} Datenbank verbunden</span>${store.keepDays ? ` – Personen ohne Änderung werden nach ${store.keepDays} Tagen samt Lebenslauf gelöscht` : ' – Personen werden nicht automatisch gelöscht'}. Gespeichert werden Lebenslauf-Datei (bis ${store.maxFileMb || 12} MB), erkannter Text und Auswertung.`
               + (store.error ? `<br><span class="warn">${esc(store.error)}</span>` : '');
         $('#aiTextOnly').checked = draftAi.textOnly;
         $('#aiModel').innerHTML = models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
@@ -1103,9 +1262,12 @@
         renderTemplatesForm(openTplId);
         renderCatsForm();
         renderSalaryList();
+        $('#retentionDays').value = draft.retentionDays ?? '';
     }
 
     function readSettingsForm() {
+        const days = $('#retentionDays').value.trim();
+        draft.retentionDays = days === '' ? null : Math.max(0, Math.round(+days) || 0);
         document.querySelectorAll('#catList .cat-item').forEach(item => {
             const cat = draft.categories.find(c => c.id === item.dataset.cat);
             cat.name = item.querySelector('[data-k="name"]').value.trim() || 'Unbenannt';
@@ -1519,7 +1681,8 @@
         saveSettings();
         ai = draftAi;
         storageSet(AI_KEY, JSON.stringify(ai));
-        pushShared().catch(err => setStatus('Nur in diesem Browser gespeichert – Server nicht erreichbar: ' + err.message, true));
+        pushShared().catch(err => setStatus('Nur in diesem Browser gespeichert – Server nicht erreichbar: ' + err.message, true))
+            .then(checkStore).then(() => render());
         loadStored().then(n => { if (n) render(); scheduleSave(); });
         if (ai.enabled && !aiReady()) setStatus(ai.mode === 'server' ? 'KI-Auswertung ist eingeschaltet, aber der Server ist nicht eingerichtet.' : 'KI-Auswertung ist eingeschaltet, aber es fehlt der API-Schlüssel.', true);
         const ids = new Set(allCats().map(c => c.id));
@@ -1551,7 +1714,19 @@ Ausbildung
 Sprachen
 Deutsch, Englisch`;
 
-    render();
+    // --- Events: Bewerbende ---
+    $('#applicantSearch').addEventListener('input', renderApplicants);
+    $('#applicantsBody').addEventListener('click', e => {
+        const rm = e.target.closest('[data-remove]');
+        if (rm) { removeCandidate(rm.dataset.remove); return; }
+        const row = e.target.closest('[data-select]');
+        if (!row) return;
+        selectedId = row.dataset.select;
+        render();
+        $('#applicantDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    window.addEventListener('hashchange', showView);
+    showView();
     // Beim Laden prüfen, ob ein eingerichteter Server vorhanden ist (sobald das KI-Modul geladen ist)
     const initServer = async () => { server = await CVAi.checkServer(SERVER_URL); render(); };
     pullShared().then(changed => {

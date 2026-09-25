@@ -227,7 +227,8 @@
 
     /** Ergänzt fehlende Felder und übernimmt Einstellungen aus älteren Versionen (globale Faktoren, «verwandt» je Beruf). */
     function normalizeSettings(s) {
-        const out = { categories: [], templates: [], classAdjustments: [], salaryTables: [] };
+        const out = { categories: [], templates: [], classAdjustments: [], salaryTables: [], retentionDays: null };
+        if (s.retentionDays !== null && s.retentionDays !== undefined && s.retentionDays !== '' && +s.retentionDays >= 0) out.retentionDays = Math.round(+s.retentionDays);
         out.categories = (s.categories || []).map(c => ({ id: c.id, name: c.name, keywords: c.keywords || [] }));
         if (Array.isArray(s.templates) && s.templates.length) {
             out.templates = s.templates.map(upgradeTemplate);
@@ -323,7 +324,8 @@
 
     /** Stichwort im Text? Kurze Stichwörter (bis 3 Zeichen, z. B. «hf», «efz») nur als ganzes Wort; «a+b» = beide. */
     function keywordHit(text, kw) {
-        return kw.split('+').map(k => k.trim().toLowerCase()).filter(Boolean).every(k =>
+        text = fold(text);
+        return kw.split('+').map(k => fold(k.trim().toLowerCase())).filter(Boolean).every(k =>
             k.length <= 3 ? new RegExp('(^|[^a-zäöüéèà0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-zäöüéèà0-9])').test(text) : text.includes(k));
     }
 
@@ -370,14 +372,17 @@
         { id: 'plus1', label: '+1 Klasse', delta: 1, cap: null }
     ];
 
+    /** Umlaute und «ae/oe/ue» gleich behandeln («Sozialpaedagogin» = «Sozialpädagogin»). */
+    const fold = s => s.replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue');
+
     function classify(title, details, categories) {
-        const t = ' ' + (title || '').toLowerCase() + ' ';
-        const d = ' ' + (details || '').toLowerCase() + ' ';
+        const t = fold(' ' + (title || '').toLowerCase() + ' ');
+        const d = fold(' ' + (details || '').toLowerCase() + ' ');
         let best = null, bestScore = 0, titleHit = false;
         for (const cat of categories) {
             let score = 0, hitTitle = false;
             for (const raw of cat.keywords) {
-                const kw = raw.toLowerCase();
+                const kw = fold(raw.toLowerCase());
                 if (!kw.trim()) continue;
                 if (t.includes(kw)) { score = Math.max(score, kw.length * 2); hitTitle = true; }
                 else if (d.includes(kw)) score = Math.max(score, kw.length);

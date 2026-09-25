@@ -322,9 +322,32 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 
 /* Icons (inline SVG) */
 .icon { width: 1.1em; height: 1.1em; vertical-align: -0.18em; flex-shrink: 0; }
-.btn .icon { margin-right: 4px; }
+.btn .icon { margin-right: 0; }
 .btn-icon .icon { width: 16px; height: 16px; vertical-align: middle; margin: 0; }
 .dz-icon { line-height: 1; }
 .dz-icon .icon { width: 40px; height: 40px; color: var(--accent); }
 .badge .icon, .pill .icon { width: 1em; height: 1em; }
 .mini-ai .icon { color: var(--accent); }
+
+/* Navigation und Seite «Bewerbende» */
+a.btn { text-decoration: none; }
+.top-nav .btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.overview-more { margin: 10px 0 0; }
+.overview-more a { color: var(--accent); font-weight: 600; }
+.search-field { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 0 12px; background: var(--surface); margin-bottom: 8px; }
+.search-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-field .icon { color: var(--muted); }
+.search-field input { border: none; outline: none; background: transparent; padding: 10px 0; flex: 1; min-width: 0; font: inherit; color: var(--text); box-shadow: none; }
+.applicants-table tbody tr { cursor: pointer; }
+.applicants-table .details { font-size: .78rem; color: var(--muted); margin-top: 2px; }
+.badge-info { background: var(--accent-soft); color: var(--accent); }
+#applicantDetail { margin-top: 0; }
+.cv-frame { width: 100%; height: 80vh; min-height: 520px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+#cvCard .rawtext { margin-top: 12px; }
+.hint.warn, .hint .warn { color: var(--warn); font-weight: 600; }
+@media (max-width: 640px) {
+    .top-nav .btn { padding: 8px 10px; }
+    .cv-frame { height: 70vh; min-height: 400px; }
+}
+.cv-pages { display: flex; flex-direction: column; gap: 12px; }
+.cv-pages canvas { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); }

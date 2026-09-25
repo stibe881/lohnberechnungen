@@ -18,11 +18,14 @@
                 <h1>Lebenslauf-Rechner</h1>
                 <p class="sub">Berufserfahrung erkennen und nach Zielberuf gewichten</p>
             </div>
-            <button class="btn btn-ghost" id="openSettings" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Einstellungen</button>
+            <nav class="row-gap top-nav">
+                <a class="btn btn-ghost" id="openApplicants" href="#bewerbende"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Bewerbende</a>
+                <button class="btn btn-ghost" id="openSettings" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Einstellungen</button>
+            </nav>
         </div>
     </header>
 
-    <main class="wrap">
+    <main class="wrap" id="viewMain">
         <section class="card upload-card">
             <div class="upload-row">
                 <label class="field">
@@ -48,7 +51,7 @@
             <div class="section-head">
                 <h2>Übersicht</h2>
                 <div class="row-gap">
-                    <button class="btn btn-ghost" id="reportAll" type="button">Alle Berichte (PDF)</button>
+                    <button class="btn btn-ghost" id="reportAll" type="button">Berichte (PDF)</button>
                     <button class="btn btn-ghost" id="exportCsv" type="button">CSV exportieren</button>
                 </div>
             </div>
@@ -69,9 +72,46 @@
                     <tbody id="overviewBody"></tbody>
                 </table>
             </div>
+            <p class="hint overview-more" id="overviewMore"></p>
         </section>
 
         <section id="detail"></section>
+    </main>
+
+    <!-- Bewerbende: alle gespeicherten Auswertungen mit Suche -->
+    <main class="wrap" id="viewApplicants" hidden>
+        <section class="card">
+            <div class="section-head">
+                <h2>Bewerbende</h2>
+                <a class="btn btn-ghost" href="#"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg> Zur Startseite</a>
+            </div>
+            <label class="search-field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="search" id="applicantSearch" placeholder="Suchen nach Name, Funktion, Stelle, Ausbildung …" aria-label="Bewerbende suchen" autocomplete="off"></label>
+            <p class="hint" id="applicantsInfo"></p>
+            <div class="table-scroll">
+                <table class="table overview-table applicants-table">
+                    <thead>
+                        <tr>
+                            <th>Person</th>
+                            <th>Funktion / Vorlage</th>
+                            <th class="num">Anrechenbar</th>
+                            <th class="num">Einreihung</th>
+                            <th>Ausgewertet</th>
+                            <th>Aufbewahrung</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="applicantsBody"></tbody>
+                </table>
+            </div>
+        </section>
+        <div id="applicantDetail"></div>
+        <section class="card" id="cvCard" hidden>
+            <div class="section-head">
+                <h2>Lebenslauf</h2>
+                <div class="row-gap" id="cvActions"></div>
+            </div>
+            <div id="cvViewer"></div>
+        </section>
     </main>
 
     <!-- Text einfügen -->
@@ -100,6 +140,10 @@
             <p class="hint" id="sharedStatus"></p>
             <label class="check"><input type="checkbox" id="storeCandidates"> Ausgewertete Personen in der Datenbank speichern (bleiben nach dem Neuladen erhalten, für alle mit Zugangspasswort sichtbar)</label>
             <p class="hint" id="storeStatus"></p>
+            <div class="grid-4">
+                <label class="field"><span>Aufbewahrung der Bewerbenden</span><div class="suffix"><input type="number" id="retentionDays" min="0" step="1" placeholder="Server"><em>Tage</em></div></label>
+            </div>
+            <p class="hint">Personen werden so viele Tage nach der letzten Änderung samt Lebenslauf endgültig gelöscht; 0 = nie löschen, leer = Vorgabe des Servers («keep_days» in config.php). Gilt für alle, sobald die Einstellungen zentral gespeichert sind.</p>
 
             <h3>KI-Auswertung mit Claude</h3>
             <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts)</label>
