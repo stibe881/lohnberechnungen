@@ -115,7 +115,8 @@
         const t = tplOf(c);
         const cutoff = P.cutoffDate(t);
         if (c.startDate > cutoff) return null;
-        return { id: '__newjob', include: true, start: c.startDate.slice(0, 7), end: '', ongoing: true, title: 'Neue Stelle ab Stellenantritt', details: `${fmtDay(c.startDate)} bis Stichtag ${fmtDay(cutoff)}`, category: t.target, pensum: Math.round(pensumOf(c, t)), factorOverride: null, synthetic: true };
+        return { id: '__newjob', include: true, start: c.startDate, end: '', ongoing: true, title: 'Neue Stelle ab Stellenantritt', details: `${fmtDay(c.startDate)} bis Stichtag ${fmtDay(cutoff)}`, category: t.target, pensum: Math.round(pensumOf(c, t)), factorOverride: null, synthetic: true };
+
     }
     /**
      * Alle Einträge für die Berechnung: Lebenslauf-Stellen (laufende enden mit dem Stellenantritt),
@@ -127,15 +128,14 @@
         const j = newJobEntry(c);
         let base = c.entries;
         if (j) {
-            // Die bisherige Stelle endet mit dem Stellenantritt (wie in der Berechnungsvorlage der Personalabteilung)
-            const startIdx = P.ymToIndex(j.start);
-            base = base.map(e => e.ongoing && P.ymToIndex(e.start) !== null && P.ymToIndex(e.start) < startIdx
-                ? Object.assign({}, e, { ongoing: false, end: idxToYm(startIdx - 1), cutByStart: true }) : e);
+            // Die bisherige Stelle endet am Tag vor dem Stellenantritt (wie in der Berechnungsvorlage der Personalabteilung)
+            const startIdx = P.dateStart(j.start);
+            base = base.map(e => e.ongoing && P.dateStart(e.start) !== null && P.dateStart(e.start) < startIdx
+                ? Object.assign({}, e, { ongoing: false, end: P.dayToIso(startIdx - 1), cutByStart: true }) : e);
         }
-        const fam = (c.children || []).length ? P.familyEntries(c.children, base, settings.familyMaxPensum ?? 99, j ? P.ymToIndex(j.start) - 1 : cutoffIdx) : [];
+        const fam = (c.children || []).length ? P.familyEntries(c.children, base, settings.familyMaxPensum ?? 99, j ? P.dateStart(j.start) - 1 : cutoffIdx) : [];
         return base.concat(fam, j ? [j] : []);
     }
-    const idxToYm = i => Math.floor(i / 12) + '-' + String((i % 12) + 1).padStart(2, '0');
     /** Zusätzliche (automatische) Zeilen: Familienzeit und neue Stelle, mit ihrem Index in entriesFor(c). */
     const syntheticRows = (c, all) => all.map((e, i) => ({ e, i })).filter(x => x.e.synthetic);
     const rawTplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
@@ -1293,7 +1293,37 @@
             + '</p>';
     }
 
-    // --- Monatsfelder: Text «MM.JJJJ» statt Browser-Monatswähler (dort lässt sich das Jahr oft nicht eingeben) ---
+    // --- Datumsfelder: Text «TT.MM.JJJJ» (Monatsangaben aus dem Lebenslauf gelten als ganzer Monat) ---
+    /** Anzeige eines Zeitraum-Datums: «2021-08-15» → 15.08.2021; «2021-08» → 01.08.2021 (Anfang) bzw. 31.08.2021 (Ende). */
+    function dateText(s, isEnd) {
+        if (!/^\d{4}-\d{2}/.test(s || '')) return '';
+        const idx = isEnd ? P.dateEnd(s) : P.dateStart(s);
+        return idx === null ? '' : fmtDay(P.dayToIso(idx));
+    }
+    const dateInput = (attrs, s, isEnd) => `<input type="text" class="ym" inputmode="numeric" placeholder="TT.MM.JJJJ" maxlength="12" autocomplete="off" data-date="${isEnd ? 'end' : 'start'}" ${attrs} value="${esc(dateText(s, isEnd))}" title="Datum als TT.MM.JJJJ, z. B. 01.08.2021. Nur Monat und Jahr (08.2021) gilt als ganzer Monat.">`;
+    /** «15.08.2021» → «2021-08-15»; «08.2021» → «2021-08» (ganzer Monat); «2021» → Januar bzw. Dezember; leer → ''; unlesbar → null. */
+    function parseDate(text, isEnd) {
+        const s = String(text || '').trim();
+        if (!s) return '';
+        let m;
+        if ((m = /^(\d{1,2})\s*[./]\s*(\d{1,2})\s*[./]\s*(\d{4})$/.exec(s))) {
+            const d = +m[1], mo = +m[2], y = +m[3];
+            const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+            if (mo < 1 || mo > 12 || d < 1 || d > last || y < 1900 || y > 2100) return null;
+            return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        }
+        if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s))) return parseDate(`${m[3]}.${m[2]}.${m[1]}`, isEnd);
+        if ((m = /^(\d{4})$/.exec(s))) return `${m[1]}-${isEnd ? '12' : '01'}`;
+        return parseYm(s);
+    }
+    function readDateField(inp) {
+        const isEnd = inp.dataset.date === 'end';
+        const v = parseDate(inp.value, isEnd);
+        inp.classList.toggle('invalid', v === null);
+        if (v === null) { toast(`«${inp.value}» ist kein Datum – bitte als TT.MM.JJJJ eingeben, z. B. 01.08.2021.`, 'warn'); return undefined; }
+        inp.value = dateText(v, isEnd);
+        return v;
+    }
     const ymToText = ym => /^\d{4}-\d{2}$/.test(ym || '') ? ym.slice(5) + '.' + ym.slice(0, 4) : '';
     const monthInput = (attrs, ym) => `<input type="text" class="ym" inputmode="numeric" placeholder="MM.JJJJ" maxlength="12" autocomplete="off" data-ym ${attrs} value="${esc(ymToText(ym))}" title="Monat und Jahr, z. B. 08.2021 (auch 8/2021, 2021-08 oder nur 2021)">`;
     const MONTHS_DE = { jan: 1, feb: 2, mär: 3, mar: 3, apr: 4, mai: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, nov: 11, dez: 12 };
@@ -1313,7 +1343,8 @@
     }
     /** Liest ein Monatsfeld; bei unlesbarer Eingabe wird das Feld rot markiert und undefined zurückgegeben. */
     function readYmField(inp) {
-        const v = parseYm(inp.value);
+        const full = parseDate(inp.value, false);
+        const v = full === null ? null : (full || '').slice(0, 7); // Geburtsdatum: nur Monat und Jahr nötig
         inp.classList.toggle('invalid', v === null);
         if (v === null) { toast(`«${inp.value}» ist kein Monat – bitte als MM.JJJJ eingeben, z. B. 08.2021.`, 'warn'); return undefined; }
         inp.value = ymToText(v);
@@ -1431,9 +1462,9 @@
                     ${e.details ? `<div class="details" title="${esc(e.details)}">${esc(e.details)}</div>` : ''}
                 </td>
                 <td class="c-cat"><select data-f="category" aria-label="Beruf">${catOptions(e.category, true)}</select></td>
-                <td class="c-date">${monthInput('data-f="start" aria-label="Von"', e.start)}</td>
+                <td class="c-date">${dateInput('data-f="start" aria-label="Von (erster Tag)"', e.start, false)}</td>
                 <td class="c-date">
-                    ${e.ongoing ? '<div class="today">heute</div>' : monthInput('data-f="end" aria-label="Bis"', e.end)}
+                    ${e.ongoing ? '<div class="today">heute</div>' : dateInput('data-f="end" aria-label="Bis (letzter Tag)"', e.end, true)}
                     <label class="ongoing"><input type="checkbox" data-f="ongoing" ${e.ongoing ? 'checked' : ''}> bis heute</label>
                 </td>
                 <td class="c-small"><div class="suffix"><input type="number" min="0" max="100" data-f="pensum" value="${esc(e.pensum)}" aria-label="Pensum"><em>%</em></div>${e.pensumUnknown && e.include && e.category !== '__ausbildung' && e.category !== '__familie' ? '<span class="badge" title="Im Lebenslauf steht kein Pensum – 100 % angenommen. Bis 50 % zählt meist nur die Hälfte, bitte prüfen.">Pensum?</span>' : ''}</td>
@@ -1667,7 +1698,8 @@
         if (!row || !t.dataset.f) return;
         const entry = c.entries.find(x => x.id === row.dataset.id);
         const f = t.dataset.f;
-        if (t.dataset.ym !== undefined) { const v = readYmField(t); if (v === undefined) return; entry[f] = v; }
+        if (t.dataset.date) { const v = readDateField(t); if (v === undefined) return; entry[f] = v; }
+        else if (t.dataset.ym !== undefined) { const v = readYmField(t); if (v === undefined) return; entry[f] = v; }
         else if (t.type === 'checkbox') entry[f] = t.checked;
 
         else if (f === 'pensum') entry[f] = t.value === '' ? 100 : Math.max(0, Math.min(100, +t.value));
@@ -1675,10 +1707,7 @@
         else entry[f] = t.value;
         if (f === 'start' || f === 'end') entry.imprecise = false;
         if (f === 'pensum') entry.pensumUnknown = false;
-        if (f === 'ongoing' && !t.checked && !entry.end) {
-            const now = new Date();
-            entry.end = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-        }
+        if (f === 'ongoing' && !t.checked && !entry.end) entry.end = new Date().toISOString().slice(0, 10);
         if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).rules.education.factor > 0;
         render();
     });
@@ -1794,26 +1823,22 @@
         const t = tplOf(c), r = computeFor(c);
         const cutoffIso = P.cutoffDate(t);
         const cutoff = new Date(cutoffIso + 'T00:00:00');
-        const lastDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m, 0); };
-        const firstDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1); };
-        const DAYS = 365.2425;
+        const DAYS = P.DAYS_PER_YEAR;
         const rows = [];
         let total = 0;
         entriesFor(c).forEach((e, i) => {
             const pe = r.perEntry[i];
-            if (!/^\d{4}-\d{2}$/.test(e.start) || (!e.ongoing && !/^\d{4}-\d{2}$/.test(e.end))) return;
-            const von = e.id === '__newjob' ? new Date(c.startDate + 'T00:00:00') : firstDay(e.start);
-
-
-            const bis = e.ongoing ? cutoff : lastDay(e.end);
-            const days = Math.round((bis - von) / 864e5) + 1;
+            const s0 = P.dateStart(e.start), en0 = e.ongoing ? P.dateStart(cutoffIso) : P.dateEnd(e.end);
+            if (s0 === null || en0 === null) return;
+            const von = new Date(s0 * 864e5), bis = new Date(en0 * 864e5);
+            const days = en0 - s0 + 1;
             const factor = e.include ? P.weightFor(e, t) : 0;
             const dj = e.include && days > 0 ? days * factor / 100 / DAYS : null;
             if (dj) total += dj;
             const key = P.ruleKeyFor(e, t);
             // Fussnote: gleichzeitige Tätigkeiten (die Vorlage summiert sie; die App begrenzt pro Monat auf 100 %)
-            const overlaps = e.include ? c.entries.filter(o => o !== e && o.include && /^\d{4}-\d{2}$/.test(o.start) && (o.ongoing || /^\d{4}-\d{2}$/.test(o.end))
-                && o.start <= (e.ongoing ? '9999-12' : e.end) && (o.ongoing ? '9999-12' : o.end) >= e.start && P.weightFor(o, t) > 0).map(o => `«${o.title}»`) : [];
+            const overlaps = e.include ? c.entries.filter(o => o !== e && o.include && P.dateStart(o.start) !== null && (o.ongoing || P.dateEnd(o.end) !== null)
+                && P.dateStart(o.start) <= en0 && (o.ongoing ? Infinity : P.dateEnd(o.end)) >= s0 && P.weightFor(o, t) > 0).map(o => `«${o.title}»`) : [];
             const notes = [e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '' ? 'Anrechnung manuell gesetzt' : '', overlaps.length ? 'gleichzeitig mit ' + overlaps.join(', ') : ''].filter(Boolean).join('; ');
             rows.push([`${P.hrCategory(key, t)} ${P.HR_CATEGORY_NAMES[P.hrCategory(key, t)]}`, [e.title, e.details].filter(Boolean).join(' – '), von, bis, +e.pensum || 0, days > 0 ? days : '', Math.round(factor * 100) / 100, dj === null ? '' : Math.round(dj * 10000) / 10000, e.include ? '' : 'x', notes]);
 

@@ -45,7 +45,7 @@
         while ((m = TOKEN_RE.exec(line)) !== null) {
             const g = m.groups;
             let tok = null;
-            if (g.dmyY) tok = { y: +g.dmyY, m: +g.dmyM };
+            if (g.dmyY) tok = { y: +g.dmyY, m: +g.dmyM, d: +g.dmyD >= 1 && +g.dmyD <= 31 ? +g.dmyD : null };
             else if (g.nameY) tok = { y: +g.nameY, m: MONTHS[g.nameM.toLowerCase()] };
             else if (g.numY) tok = { y: +g.numY, m: +g.numM };
             else if (g.yearY) tok = { y: +g.yearY, m: null };
@@ -92,15 +92,15 @@
         let imprecise = a.m === null || (!b.present && b.m === null);
         let start, end;
         if (b.present) {
-            start = { y: a.y, m: a.m === null ? 1 : a.m };
+            start = { y: a.y, m: a.m === null ? 1 : a.m, d: a.d };
             end = null; // heute
         } else if (a.m === null && b.m === null) {
             // "2015 – 2020": als 5 Jahre zählen (Jan 2015 – Dez 2019), "2020 – 2020" als 1 Jahr
             start = { y: a.y, m: 1 };
             end = b.y > a.y ? { y: b.y - 1, m: 12 } : { y: b.y, m: 12 };
         } else {
-            start = { y: a.y, m: a.m === null ? 1 : a.m };
-            end = { y: b.y, m: b.m === null ? 6 : b.m };
+            start = { y: a.y, m: a.m === null ? 1 : a.m, d: a.d };
+            end = { y: b.y, m: b.m === null ? 6 : b.m, d: b.d };
         }
         return { start, end, ongoing: b.present === true, index, endIndex, imprecise };
     }
@@ -600,14 +600,36 @@
         });
     }
 
+    /** «YYYY-MM» oder, wenn der Tag im Lebenslauf steht («01.08.2021»), «YYYY-MM-DD». */
     function ym(p) {
-        return p.y + '-' + String(p.m).padStart(2, '0');
+        return p.y + '-' + String(p.m).padStart(2, '0') + (p.d ? '-' + String(p.d).padStart(2, '0') : '');
     }
 
+
     function ymToIndex(s) {
-        const m = /^(\d{4})-(\d{2})$/.exec(s || '');
+        const m = /^(\d{4})-(\d{2})/.exec(s || '');
         return m ? (+m[1]) * 12 + (+m[2] - 1) : null;
     }
+
+    // --- Tagesgenaue Zeiträume (wie die Berechnungsvorlage der Personalabteilung: Tage × Anrechnung / 365.2425) ---
+    const DAYS_PER_YEAR = 365.2425;
+    const dayIdx = (y, m, d) => Math.round(Date.UTC(y, m - 1, d) / 864e5);
+    /** Erster Tag eines Zeitraums als Tagesindex: «2021-08-15» → dieser Tag, «2021-08» → 1. des Monats. */
+    function dateStart(s) {
+        const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(s || '');
+        return m ? dayIdx(+m[1], +m[2], m[3] ? +m[3] : 1) : null;
+    }
+    /** Letzter Tag eines Zeitraums: «2021-08-15» → dieser Tag, «2021-08» → letzter Tag des Monats. */
+    function dateEnd(s) {
+        const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(s || '');
+        if (!m) return null;
+        return m[3] ? dayIdx(+m[1], +m[2], +m[3]) : dayIdx(+m[1], +m[2] + 1, 1) - 1;
+    }
+    /** Tagesindex → «YYYY-MM-DD». */
+    function dayToIso(i) { return new Date(i * 864e5).toISOString().slice(0, 10); }
+    /** Tagesindex → Monatsindex (für den Zeitstrahl). */
+    const dayToMonth = i => { const d = new Date(i * 864e5); return d.getUTCFullYear() * 12 + d.getUTCMonth(); };
+    const daysToMonths = d => d / DAYS_PER_YEAR * 12;
 
     /** Welche Regelgruppe einer Vorlage für einen Eintrag gilt. */
     function ruleKeyFor(entry, tpl) {
@@ -645,12 +667,14 @@
      * @returns {Array} Einträge (category '__familie', synthetic: true)
      */
     function familyEntries(children, entries, maxPensum, endIdx) {
-        const kids = (children || []).map(ymToIndex).filter(k => k !== null);
+        // endIdx = letzter Tag (Tagesindex); Kinder als «YYYY-MM» oder «YYYY-MM-DD»
+        const kids = (children || []).map(dateStart).filter(k => k !== null);
         if (!kids.length) return [];
-        const from = Math.min(...kids), to = Math.min(endIdx, Math.max(...kids) + 18 * 12 - 1);
+        const plus18 = k => { const d = new Date(k * 864e5); return dayIdx(d.getUTCFullYear() + 18, d.getUTCMonth() + 1, d.getUTCDate()) - 1; };
+        const from = Math.min(...kids), to = Math.min(endIdx, Math.max(...kids.map(plus18)));
         const work = new Map(), covered = new Set();
         for (const e of entries) {
-            const s = ymToIndex(e.start), en = e.ongoing ? endIdx : ymToIndex(e.end);
+            const s = dateStart(e.start), en = e.ongoing ? endIdx : dateEnd(e.end);
             if (s === null || en === null || !e.include) continue;
             for (let k = s; k <= en; k++) {
                 if (e.category === '__familie') covered.add(k);
@@ -659,7 +683,7 @@
         }
         const out = [];
         let run = null;
-        const close = () => { if (run) { out.push({ id: '__familie_' + run.s, include: true, start: indexToYm(run.s), end: indexToYm(run.e), ongoing: false, title: 'Familienzeit (Kinder unter 18)', details: `automatisch: Arbeitspensum höchstens ${maxPensum} %`, category: '__familie', pensum: 100, factorOverride: null, synthetic: true }); run = null; } };
+        const close = () => { if (run) { out.push({ id: '__familie_' + run.s, include: true, start: dayToIso(run.s), end: dayToIso(run.e), ongoing: false, title: 'Familienzeit (Kinder unter 18)', details: `automatisch: Arbeitspensum höchstens ${maxPensum} %`, category: '__familie', pensum: 100, factorOverride: null, synthetic: true }); run = null; } };
         for (let k = from; k <= to; k++) {
             const ok = !covered.has(k) && (work.get(k) || 0) <= maxPensum;
             if (ok) { if (run && run.e === k - 1) run.e = k; else { close(); run = { s: k, e: k }; } } else close();
@@ -667,7 +691,7 @@
         close();
         return out;
     }
-    const indexToYm = i => Math.floor(i / 12) + '-' + String((i % 12) + 1).padStart(2, '0');
+
 
     const MONTH_NAMES = { januar: 1, jan: 1, februar: 2, feb: 2, märz: 3, maerz: 3, mär: 3, april: 4, apr: 4, mai: 5, juni: 6, jun: 6, juli: 7, jul: 7, august: 8, aug: 8, september: 9, sep: 9, sept: 9, oktober: 10, okt: 10, november: 11, nov: 11, dezember: 12, dez: 12 };
     /**
@@ -728,9 +752,9 @@
 
     const NOT_WORK = new Set(['__ausbildung', '__zweitausbildung', '__familie']);
 
-    /** Letzter Monat, der gezählt wird: heute oder Dezember des laufenden Jahres (Stichtag 31.12.). */
+    /** Letzter Tag, der gezählt wird (Tagesindex): heute oder der 31.12. des laufenden Jahres (Stichtag). */
     function cutoffIndex(tpl, today) {
-        return tpl.cutoff === 'yearEnd' ? today.getFullYear() * 12 + 11 : today.getFullYear() * 12 + today.getMonth();
+        return dateStart(cutoffDate(tpl, today || new Date()));
     }
 
     /**
@@ -747,16 +771,17 @@
         today = today || new Date();
         opts = opts || {};
         const target = tpl.target;
+        // Tagesgenau: jeder Kalendertag zwischen erstem Tag und letztem Tag (inklusive) zählt, Jahre = Tage / 365.2425
         const nowIdx = cutoffIndex(tpl, today);
-        const birthIdx = ymToIndex(opts.birth);
-        const minIdx = birthIdx !== null && tpl.minAge ? birthIdx + Math.round(tpl.minAge * 12) : null;
-        const familyCap = tpl.familyMaxYears ? Math.round(tpl.familyMaxYears * 12) : Infinity;
-        const months = new Map(); // idx -> [{i, w, cat}]
-        const perEntry = entries.map(() => ({ months: 0, credited: 0, factor: 0, valid: false, ruleKey: '' }));
+        const bm = /^(\d{4})-(\d{2})/.exec(opts.birth || '');
+        const minIdx = bm && tpl.minAge ? dayIdx(+bm[1] + Math.floor(tpl.minAge), +bm[2], 1) + Math.round((tpl.minAge % 1) * DAYS_PER_YEAR) : null;
+        const familyCap = tpl.familyMaxYears ? Math.round(tpl.familyMaxYears * DAYS_PER_YEAR) : Infinity;
+        const months = new Map(); // Tagesindex -> [{i, w, cat}]
+        const perEntry = entries.map(() => ({ months: 0, days: 0, credited: 0, factor: 0, valid: false, ruleKey: '' }));
 
         entries.forEach((e, i) => {
-            const s = ymToIndex(e.start);
-            let en = e.ongoing ? nowIdx : ymToIndex(e.end);
+            const s = dateStart(e.start);
+            let en = e.ongoing ? nowIdx : dateEnd(e.end);
             const f = weightFor(e, tpl);
             perEntry[i].factor = Math.round(f * 10) / 10;
             perEntry[i].ruleKey = ruleKeyFor(e, tpl);
@@ -764,7 +789,8 @@
             en = Math.min(en, nowIdx);
             if (en < s) return;
             perEntry[i].valid = true;
-            perEntry[i].months = en - s + 1;
+            perEntry[i].days = en - s + 1;
+            perEntry[i].months = daysToMonths(en - s + 1);
             if (!e.include) return;
             for (let k = s; k <= en; k++) {
                 if (!months.has(k)) months.set(k, []);
@@ -817,7 +843,10 @@
             if (usedFamily) familyUsed++;
         }
 
-        const exactYears = credited / 12;
+        // Von Tagen auf Jahre bzw. «Monate» (für die Anzeige) umrechnen
+        perEntry.forEach(p => { p.credited = daysToMonths(p.credited); });
+        // Auf 2 Dezimalen wie in der Vorlage (7.4996 → 7.50), damit Rundung und Stufe nicht an Rundungsresten scheitern
+        const exactYears = Math.round(credited / DAYS_PER_YEAR * 100) / 100;
         let creditedYears = exactYears;
         let capped = false;
         if (tpl.maxYears && creditedYears > tpl.maxYears) { creditedYears = +tpl.maxYears; capped = true; }
@@ -825,17 +854,19 @@
         creditedYears = roundYears(creditedYears, tpl.rounding);
 
         return {
-            totalYears: totalMonths / 12,
-            targetYears: targetMonths / 12,
-            otherYears: (totalMonths - targetMonths) / 12,
+            totalYears: totalMonths / DAYS_PER_YEAR,
+            targetYears: targetMonths / DAYS_PER_YEAR,
+            otherYears: (totalMonths - targetMonths) / DAYS_PER_YEAR,
             exactYears,
             beforeRounding,
             creditedYears,
             capped,
             rounded: creditedYears !== beforeRounding,
-            beforeMinAgeYears: beforeMinAge / 12,
-            minAgeMonth: minIdx,
-            cutoffMonth: nowIdx,
+            beforeMinAgeYears: beforeMinAge / DAYS_PER_YEAR,
+            minAgeMonth: minIdx !== null ? dayToMonth(minIdx) : null,
+            cutoffMonth: dayToMonth(nowIdx),
+            minAgeDay: minIdx,
+            cutoffDay: nowIdx,
             familyCapped,
             perEntry,
             perCategory
@@ -1327,7 +1358,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, extractChildren, familyEntries, cutoffIndex, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+    const api = { extractEntries, extractBirth, extractChildren, familyEntries, cutoffIndex, dateStart, dateEnd, dayToIso, DAYS_PER_YEAR, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
 
  parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

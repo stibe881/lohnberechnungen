@@ -8,7 +8,9 @@
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const fmt = y => (Math.round(y * 10) / 10).toLocaleString('de-CH', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-    const fmtDate = s => { const m = /^(\d{4})-(\d{2})$/.exec(s || ''); return m ? m[2] + '.' + m[1] : '–'; };
+    /** «2021-08-15» → 15.08.2021, «2021-08» → 08.2021 */
+    const fmtDate = s => { const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(s || ''); return m ? (m[3] ? m[3] + '.' : '') + m[2] + '.' + m[1] : '–'; };
+
 
     /** Kopf mit Logo und Organisation (aus den Druckeinstellungen), leer wenn nichts hinterlegt. */
     function orgHtml(v) {

@@ -17,6 +17,7 @@ Erfasse jede berufliche Tätigkeit und jede Ausbildung, die einen Zeitraum hat, 
 - Mehrere Funktionen beim gleichen Arbeitgeber mit unterschiedlichen Zeiträumen sind separate Einträge.
 - Übernimm die Daten so, wie sie im Lebenslauf stehen. Steht nur ein Jahr, setze den Monat auf null. Rechne nichts um.
 - Bei «heute», «aktuell», «seit …», «bis dato» o. ä. ist ongoing = true und end_year/end_month sind null.
+- start_day/end_day: der Tag, wenn er im Dokument steht («01.08.2021», «15. März 2019»), sonst null.
 - Einträge ohne erkennbaren Zeitraum lässt du weg.
 - category: Wähle den Beruf aus der Liste unten anhand der tatsächlichen Tätigkeit, nicht anhand des Arbeitgebers (eine Sachbearbeiterin an einer Schule ist kaufmännisch, keine Lehrperson). Passt kein Beruf, nimm "__sonstige".
 - Schulen, Weiterbildungen, Kurse und Praktika im Rahmen einer Ausbildung erhalten category "__ausbildung".
@@ -66,12 +67,14 @@ function buildSchema(categoryIds, functionIds) {
                 items: {
                     type: 'object',
                     additionalProperties: false,
-                    required: ['title', 'employer', 'start_year', 'start_month', 'end_year', 'end_month', 'ongoing', 'category', 'pensum', 'note'],
+                    required: ['title', 'employer', 'start_year', 'start_month', 'start_day', 'end_year', 'end_month', 'end_day', 'ongoing', 'category', 'pensum', 'note'],
                     properties: {
                         title: { type: 'string' },
                         employer: { type: 'string' },
                         start_year: { type: 'integer' },
                         start_month: intOrNull,
+                        start_day: intOrNull,
+                        end_day: intOrNull,
                         end_year: intOrNull,
                         end_month: intOrNull,
                         ongoing: { type: 'boolean' },
@@ -106,6 +109,8 @@ function categoryList(categories) {
 }
 
 const validMonth = m => Number.isInteger(m) && m >= 1 && m <= 12 ? m : null;
+const validDay = (d, y, m) => Number.isInteger(d) && d >= 1 && d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
+
 const pad = m => String(m).padStart(2, '0');
 
 /** Wandelt einen Claude-Eintrag in das Eintragsformat der App um (gleiche Konventionen wie parser.js). */
@@ -122,7 +127,7 @@ function toEntry(e, categoryIds) {
             // «2015 – 2020» = 5 Jahre (Jan 2015 – Dez 2019), «2020 – 2020» = 1 Jahr
             end = ey > sy ? `${ey - 1}-12` : `${ey}-12`;
         } else {
-            end = `${ey}-${pad(em ?? 6)}`;
+            end = `${ey}-${pad(em ?? 6)}` + (em !== null && validDay(e.end_day, ey, em) ? '-' + pad(e.end_day) : '');
         }
         imprecise = imprecise || em === null;
     }
@@ -132,7 +137,7 @@ function toEntry(e, categoryIds) {
     return {
         id: 'e' + Math.random().toString(36).slice(2, 9),
         include: category !== '__ausbildung',   // Zweitausbildung zählt je nach Vorlage
-        start: `${sy}-${pad(sm ?? 1)}`,
+        start: `${sy}-${pad(sm ?? 1)}` + (sm !== null && validDay(e.start_day, sy, sm) ? '-' + pad(e.start_day) : ''),
         end,
         ongoing: !!e.ongoing,
         title: (e.title || '').trim() || '(ohne Bezeichnung)',

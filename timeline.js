@@ -8,7 +8,8 @@
     'use strict';
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const idx = s => { const m = /^(\d{4})-(\d{2})$/.exec(s || ''); return m ? +m[1] * 12 + (+m[2] - 1) : null; };
+    const idx = s => { const m = /^(\d{4})-(\d{2})/.exec(s || ''); return m ? +m[1] * 12 + (+m[2] - 1) : null; }; // Tag wird für den Monatsraster weggelassen
+
     const ym = i => String((i % 12) + 1).padStart(2, '0') + '.' + Math.floor(i / 12);
 
     /** Stufe für die Farbe: 3 = voll, 2 = ≥ 75 %, 1 = > 0 %, 0 = nicht angerechnet */

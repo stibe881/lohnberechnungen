@@ -1,5 +1,6 @@
 // Ausführen: node lebenslauf-rechner/tests/parser.test.js
 const assert = require('assert');
+const near = (a, b, tol) => assert.ok(Math.abs(a - b) <= (tol ?? 0.02), `${a} ≠ ${b}`);
 const P = require('../parser.js');
 const S = JSON.parse(JSON.stringify(P.DEFAULT_SETTINGS));
 const rules = (target, extra) => Object.assign(P.makeTemplate(target), extra || {});
@@ -44,12 +45,12 @@ const ex = [
   { include: true, start: '2015-01', end: '2019-12', category: 'lehrperson', pensum: 100 },
 ];
 let r = P.compute(ex, rules('lehrperson'), today);
-assert.strictEqual(r.totalYears, 10);
-assert.strictEqual(r.targetYears, 5);
-assert.strictEqual(r.creditedYears, 7.5);
+near(r.totalYears, 10);
+near(r.targetYears, 5);
+near(r.creditedYears, 7.5);
 // Gleicher Lebenslauf, Bewerbung als Kaufmann -> ebenfalls 7.5, aber andere Aufteilung
 r = P.compute(ex, rules('kaufm'), today);
-assert.strictEqual(r.creditedYears, 7.5);
+near(r.creditedYears, 7.5);
 
 // Überschneidung: nicht doppelt zählen, höherer Faktor gewinnt
 const ov = [
@@ -57,15 +58,15 @@ const ov = [
   { include: true, start: '2015-01', end: '2019-12', category: 'kaufm', pensum: 50 },
 ];
 r = P.compute(ov, rules('lehrperson'), today);
-assert.strictEqual(r.totalYears, 5);
-assert.strictEqual(r.creditedYears, 5);
+near(r.totalYears, 5);
+near(r.creditedYears, 5);
 // Pensum-Modus: 50% Lehrer (1.0) + 50% Kaufm (0.5) = 0.75 pro Monat
 r = P.compute(ov, P.upgradeTemplate({ target: 'lehrperson', pensumMode: true }), today);
-assert.ok(Math.abs(r.creditedYears - 3.75) < 1e-9);
+near(r.creditedYears, 3.75);
 
 // Verwandte Berufe
 r = P.compute([{ include: true, start: '2015-01', end: '2016-12', category: 'sozial', pensum: 100 }], rules('lehrperson', { related: ['sozial'] }), today);
-assert.strictEqual(r.creditedYears, 1.5);
+near(r.creditedYears, 1.5);
 
 // Nur Jahreszahlen: 2015 – 2020 = 5 Jahre
 const yr = P.findRanges('2015 – 2020 Lehrer', today)[0];
@@ -79,21 +80,21 @@ assert.strictEqual(P.findRanges('2000 Neuchâtel', today).length, 0);
 // Familienarbeit mit Obergrenze: 6 Jahre à 50 %, max. 4 Jahre anrechenbar -> 2 Jahre
 const fam = [{ include: true, start: '2010-01', end: '2015-12', category: '__familie', pensum: 100 }];
 r = P.compute(fam, rules('lehrperson', { familyMaxYears: 4 }), today);
-assert.strictEqual(r.creditedYears, 2);
+near(r.creditedYears, 2);
 assert.ok(r.familyCapped);
-assert.strictEqual(r.totalYears, 0); // Familienarbeit ist keine Berufserfahrung
+near(r.totalYears, 0); // Familienarbeit ist keine Berufserfahrung
 // Mindestalter 20, geboren 01.2000: Erfahrung vor 01.2020 zählt nicht
 const young = [{ include: true, start: '2018-01', end: '2021-12', category: 'lehrperson', pensum: 100 }];
 r = P.compute(young, rules('lehrperson', { minAge: 20 }), today, { birth: '2000-01' });
-assert.strictEqual(r.creditedYears, 2);
-assert.strictEqual(r.beforeMinAgeYears, 2);
+near(r.creditedYears, 2);
+near(r.beforeMinAgeYears, 2);
 // Maximum und Rundung
 r = P.compute(ex, rules('lehrperson', { rounding: 'down' }), today);
-assert.strictEqual(r.creditedYears, 7);
+near(r.creditedYears, 7);
 r = P.compute(ex, rules('lehrperson', { rounding: 'half-down' }), today);
-assert.strictEqual(r.creditedYears, 7.5);
+near(r.creditedYears, 7.5);
 r = P.compute(ex, rules('lehrperson', { maxYears: 6 }), today);
-assert.strictEqual(r.creditedYears, 6);
+near(r.creditedYears, 6);
 assert.ok(r.capped);
 // Militärdienst und Familienarbeit erkennen, Geburtsdatum finden
 const e2 = P.extractEntries('Berufserfahrung\n2012 – 2014 Familienpause (Betreuung der eigenen Kinder)\n03/2008 – 07/2008 Rekrutenschule', S, today);
@@ -122,12 +123,12 @@ assert.strictEqual(y(one('__assistenz', 60)), 0.6); // 100 % vom geleisteten Pen
 assert.strictEqual(y(one('__zweitausbildung', 100)), 0.5);
 // Familienzeit 1/3 zusätzlich zu 50 % Arbeit, zusammen max. 100 %: 0.5 + 0.333 = 0.833
 const fam2 = one('sozial', 50).concat(one('__familie', 100));
-assert.ok(Math.abs(y(fam2) - (0.5 + 1 / 3)) < 1e-9);
+near(y(fam2), 0.5 + 1 / 3);
 const fam3 = one('sozial', 80).concat(one('__familie', 100)); // 1.0 + 0.333 -> gedeckelt auf 1.0
-assert.ok(Math.abs(y(fam3) - 1) < 1e-9);
+near(y(fam3), 1);
 // Stichtag 31.12.: laufende Stelle zählt bis Dezember
 const cut = P.compute([{ include: true, start: '2026-01', end: '', ongoing: true, category: 'sozial', pensum: 100 }], Object.assign({}, reglement, { cutoff: 'yearEnd' }), today);
-assert.strictEqual(cut.exactYears, 1);
+near(cut.exactYears, 1);
 // Lohneinreihung: 11–13, Aufstieg nach 12 und 24 Jahren
 const pl = t => P.placement(t, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), null, { classes: { 11: [1,2,3,4,5,6,7,8,9,10], 12: [11,12,13,14,15,16,17,18,19,20], 13: [21,22,23,24,25,26,27,28,29,30] } });
 assert.deepStrictEqual([pl(0).cls, pl(0).stage, pl(0).salary], [11, 1, 1]);
@@ -491,21 +492,21 @@ const paE = (start, end, pensum, cat, include) => ({ id: start + end + cat, titl
 const paEntries = [paE('2005-08', '2008-07', 100, '__ausbildung', false), paE('2003-08', '2004-01', 80, 'betreuung'), paE('2004-10', '2005-07', 100, 'gastro'), paE('2009-08', '2010-07', 20, 'gastro'),
     paE('2016-01', '2026-05', 30, 'gastro'), paE('2018-03', '2021-06', 40, 'gastro'), paE('2021-07', '2022-11', 80, 'gastro'), paE('2023-07', '2026-05', 70, 'gastro'),
     paE('2026-06', '2026-12', 80, '__assistenz'), paE('2009-08', '2021-06', 100, '__familie'), paE('2022-12', '2023-06', 100, '__familie')];
-assert.strictEqual(P.compute(paEntries, paTpl, hrToday).exactYears.toFixed(2), '17.79');
+assert.strictEqual(P.compute(paEntries, paTpl, hrToday).exactYears.toFixed(2), '17.80');
 assert.ok(P.compute(paEntries, Object.assign({}, paTpl, { combine: 'sum' }), hrToday).exactYears < 17); // mit Begrenzung auf 100 % pro Monat deutlich weniger
 console.log('Berechnungsvorlage Personal, Beispiel 2 (Assistenz, Summe ohne Begrenzung) bestanden.');
 
 // Familienzeit automatisch aus den Kindern (Praxis Personalabteilung): Monate mit Kind unter 18 und Arbeitspensum unter 100 %
 const famWork = [paE('2009-08', '2010-07', 20, 'gastro'), paE('2016-01', '2026-05', 30, 'gastro'), paE('2018-03', '2021-06', 40, 'gastro'), paE('2021-07', '2022-11', 80, 'gastro'), paE('2023-07', '2026-05', 70, 'gastro')];
-const famAuto = P.familyEntries(['2009-08', '2012-03'], famWork, 99, 2026 * 12 + 4); // bis 05.2026 (Stellenantritt 06.2026)
-assert.deepStrictEqual(famAuto.map(f => f.start + '–' + f.end), ['2009-08–2021-06', '2022-12–2023-06']);
+const famAuto = P.familyEntries(['2009-08', '2012-03'], famWork, 99, P.dateEnd('2026-05')); // bis 31.05.2026 (Stellenantritt 01.06.2026)
+assert.deepStrictEqual(famAuto.map(f => f.start + '–' + f.end), ['2009-08-01–2021-06-30', '2022-12-01–2023-06-30']);
 assert.ok(famAuto.every(f => f.category === '__familie' && f.synthetic));
-assert.deepStrictEqual(P.familyEntries(['2009-08'], famWork.concat(paE('2009-08', '2010-07', 100, '__familie')), 99, 2010 * 12 + 11).map(f => f.start + '–' + f.end), ['2010-08–2010-12']); // eigener Familienzeit-Eintrag deckt 08.2009–07.2010 ab
-assert.deepStrictEqual(P.familyEntries([], famWork, 99, 2026 * 12), []);
+assert.deepStrictEqual(P.familyEntries(['2009-08'], famWork.concat(paE('2009-08', '2010-07', 100, '__familie')), 99, P.dateEnd('2010-12')).map(f => f.start + '–' + f.end), ['2010-08-01–2010-12-31']); // eigener Familienzeit-Eintrag deckt 08.2009–07.2010 ab
+assert.deepStrictEqual(P.familyEntries([], famWork, 99, P.dateEnd('2026-12')), []);
 assert.deepStrictEqual(P.extractChildren('Kinder: Lena (August 2009), Noah (03.2012)', hrToday), ['2009-08', '2012-03']);
 assert.deepStrictEqual(P.extractChildren('Zivilstand: verheiratet, 2 Kinder (2009 und 2012)\nKinderbetreuung Kita 2015', hrToday), ['2009-01', '2012-01']);
 assert.deepStrictEqual(P.extractChildren('Praktikum Kinderkrippe 2015', hrToday), []);
 // Gesamtbeispiel: Lebenslauf-Stellen + automatische Familienzeit + neue Stelle = 17.80 wie in der Vorlage
 const famAll = paEntries.filter(e => e.category !== '__familie' && e.category !== '__assistenz').concat(famAuto, paE('2026-06', '2026-12', 80, '__assistenz'));
-assert.strictEqual(P.compute(famAll, paTpl, hrToday).exactYears.toFixed(2), '17.79');
+assert.strictEqual(P.compute(famAll, paTpl, hrToday).exactYears.toFixed(2), '17.80');
 console.log('Familienzeit automatisch (Kinder) bestanden.');
