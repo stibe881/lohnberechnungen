@@ -258,6 +258,9 @@
             if (v !== null && v !== undefined && v !== '' && +v >= 0) out.retentionByStatus[st.id] = Math.round(+v);
         }
         out.fourEyes = !!s.fourEyes;
+        // Kopf- und Fusszeile der Druckausgaben (Bericht, Lohnblatt)
+        const pr = s.print || {};
+        out.print = { org: String(pr.org || '').slice(0, 120), footer: String(pr.footer || '').slice(0, 400), logo: /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/.test(pr.logo || '') && pr.logo.length < 400000 ? pr.logo : '' };
         const tables = Array.isArray(s.salaryTables) ? s.salaryTables : s.salaryTable ? [s.salaryTable] : [];
         out.salaryTables = tables.filter(t => t && t.classes && Object.keys(t.classes).length).map(normalizeSalaryTable);
         const tableIds = new Set(out.salaryTables.map(t => t.id));
@@ -734,6 +737,22 @@
             lesson: pick(salaryTable && salaryTable.lessons), hour: pick(salaryTable && salaryTable.hours) };
     }
 
+    /**
+     * Schweizer Geldformat: «CHF 87’450.–» für ganze Franken, sonst «CHF 87’450.50».
+     * Tausender mit Apostroph (’), Rappen mit Punkt.
+     */
+    function formatChf(v, opts) {
+        opts = opts || {};
+        const n = Math.round((+v || 0) * 100) / 100;
+        const neg = n < 0;
+        const abs = Math.abs(n);
+        const whole = Math.floor(abs + 1e-9);
+        const cents = Math.round((abs - whole) * 100);
+        const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, '’');
+        const dec = cents === 0 ? '.–' : '.' + String(cents).padStart(2, '0');
+        return (opts.plain ? '' : 'CHF ') + (neg ? '−' : '') + grouped + dec;
+    }
+
     /** Zahl aus einer Tabellenzelle: 85432, «85'432.50», «CHF 85 432», «85.432,50». Sonst null. */
     function parseAmount(v) {
         if (typeof v === 'number') return isFinite(v) ? v : null;
@@ -1176,7 +1195,8 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+ parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -76,7 +76,12 @@
         clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
         file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
         download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
-        external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+        external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+        briefcase: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+        info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+        compare: '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/>',
+        print: '<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3h12v6"/><rect width="12" height="8" x="6" y="14"/>',
+        history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'
     };
     const icon = (name, label) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${ICONS[name]}</svg>`;
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -128,8 +133,9 @@
         const pl = P.placement(r.creditedYears, t, adjustmentOf(c), sel.table);
         return pl && Object.assign(pl, { table: sel.table, future: sel.future });
     }
-    const chf = v => 'CHF ' + (Math.round(v * 20) / 20).toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const chfExact = v => 'CHF ' + v.toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    /** Schweizer Geldformat: CHF 87’450.– bzw. CHF 87’450.50 (Apostroph als Tausendertrennzeichen, auf 5 Rappen gerundet). */
+    const chf = v => P.formatChf(Math.round(v * 20) / 20);
+    const chfExact = v => P.formatChf(v);
     const fmtDay = d => d ? d.split('-').reverse().join('.') : '';
     const fmtNum = v => (Math.round(v * 10) / 10).toLocaleString('de-CH', { maximumFractionDigits: 1 });
     /** Pensum der neuen Stelle in %: aus den Lektionen, wenn die Vorlage Lektionen für 100 % kennt. */
@@ -218,11 +224,78 @@
         return s;
     }
 
+    // --- Meldungen (Toasts) und Fortschritt ---
+    const toastBox = document.createElement('div');
+    toastBox.className = 'toasts';
+    toastBox.setAttribute('aria-live', 'polite');
+    document.body.appendChild(toastBox);
+    /**
+     * Kurze Meldung unten rechts. kind: 'ok' | 'info' | 'warn' | 'error'.
+     * opts.action = {label, fn} zeigt einen Knopf (z. B. «Rückgängig»); opts.ms = Anzeigedauer; opts.onExpire läuft, wenn die Meldung ohne Klick verschwindet.
+     */
+    function toast(msg, kind, opts) {
+        opts = opts || {};
+        kind = kind || 'info';
+        const el = document.createElement('div');
+        el.className = 'toast toast-' + kind;
+        el.setAttribute('role', kind === 'error' || kind === 'warn' ? 'alert' : 'status');
+        const icons = { ok: 'check', info: 'info', warn: 'alert', error: 'alert' };
+        el.innerHTML = `<span class="toast-icon">${icon(icons[kind])}</span><span class="toast-text">${esc(msg)}</span>`
+            + (opts.action ? `<button type="button" class="toast-action">${esc(opts.action.label)}</button>` : '')
+            + `<button type="button" class="toast-close" aria-label="Schliessen">${icon('x')}</button>`;
+        let done = false;
+        const remove = () => { if (el.isConnected) { el.classList.add('out'); setTimeout(() => el.remove(), 180); } };
+        const finish = expired => { if (done) return; done = true; clearTimeout(timer); remove(); if (expired && opts.onExpire) opts.onExpire(); };
+        const ms = opts.ms || (opts.action ? 8000 : kind === 'error' ? 9000 : 4500);
+        const timer = setTimeout(() => finish(true), ms);
+        el.querySelector('.toast-close').addEventListener('click', () => finish(true));
+        if (opts.action) el.querySelector('.toast-action').addEventListener('click', () => { finish(false); opts.action.fn(); });
+        // In einem offenen modalen Dialog ist die Seite dahinter gesperrt – die Meldung muss dann im Dialog liegen
+        const box = toastContainer();
+        box.appendChild(el);
+        while (box.children.length > 4) box.firstChild.remove();
+        return { close: () => finish(true) };
+    }
+    function toastContainer() {
+        const dlg = [...document.querySelectorAll('dialog[open]')].pop();
+        if (!dlg) return toastBox;
+        let box = dlg.querySelector(':scope > .toasts');
+        if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('aria-live', 'polite'); dlg.appendChild(box); }
+        return box;
+    }
+    /** Meldung zur Auswertung: Fehler als rote Meldung, sonst kurze Bestätigung. Leer = nur die Statuszeile löschen. */
     function setStatus(msg, isError) {
         const el = $('#status');
-        el.textContent = msg || '';
+        el.textContent = isError ? msg || '' : ''; // Fehler bleiben stehen, alles andere erscheint nur kurz als Meldung
         el.classList.toggle('error', !!isError);
+        if (msg) toast(msg, isError ? 'error' : 'ok');
     }
+
+    /**
+     * Etwas sofort tun und 8 Sekunden lang «Rückgängig» anbieten. undo() stellt den vorherigen Zustand wieder her,
+     * commit() (optional) läuft erst, wenn die Frist ohne Klick abgelaufen ist – z. B. das endgültige Löschen auf dem Server.
+     */
+    function undoable(msg, undo, commit) {
+        return toast(msg, 'info', { action: { label: 'Rückgängig', fn: undo }, onExpire: commit, ms: 8000 });
+    }
+    /** Fortschrittsbalken unter der Ablagefläche: done von total, mit Beschriftung. */
+    function setProgress(done, total, label) {
+        const box = $('#progress');
+        if (!total) { box.hidden = true; return; }
+        box.hidden = false;
+        box.querySelector('.progress-bar').style.width = Math.round(done / total * 100) + '%';
+        box.querySelector('.progress-text').textContent = label || `${done} von ${total} ausgewertet`;
+        box.setAttribute('aria-valuenow', done);
+        box.setAttribute('aria-valuemax', total);
+    }
+    /** Arbeitsschritt einer Person während der Auswertung (für Übersicht und Personenansicht). */
+    function setStep(c, step) {
+        c.step = step;
+        const els = document.querySelectorAll(`[data-step="${c.id}"]`);
+        els.forEach(el => { el.textContent = step; });
+    }
+    const STEP_TEXT = { read: 'Text wird gelesen …', ai: 'Claude wertet aus …', rules: 'Regeln werden angewendet …', calc: 'Einreihung wird berechnet …' };
+
 
     // --- Datei lesen ---
     async function readFile(file, useAi) {
@@ -334,6 +407,7 @@
         c.hinweise = '';
         if (useAi) {
             try {
+                setStep(c, STEP_TEXT.ai);
                 if (!window.CVAi) throw new Error('KI-Modul konnte nicht geladen werden (Internetverbindung?).');
                 const res = await window.CVAi.analyze(Object.assign(
                     { model: ai.model, categories: settings.categories, pdfBase64: c.pdfBase64, text: c.text,
@@ -351,16 +425,19 @@
                 if (res.birth && !c.birthEdited) c.birth = res.birth;
                 c.source = 'ki';
                 c.model = ai.model || window.CVAi.DEFAULT_MODEL;
+                setStep(c, STEP_TEXT.calc);
                 return;
             } catch (e) {
                 c.aiError = e.message;
             }
         }
+        setStep(c, STEP_TEXT.rules);
         c.entries = P.extractEntries(c.text, settings);
         c.aiFlags = null;
         applySuggestion(c, null);
         if (!c.birthEdited) c.birth = P.extractBirth(c.text) || c.birth || '';
         c.source = 'regeln';
+        setStep(c, STEP_TEXT.calc);
     }
 
     function newCandidate(name, text, pdfBase64) {
@@ -437,9 +514,12 @@
             }
             const errors = [];
             const batch = [];
+            setProgress(0, sources.length, `Dateien werden gelesen (0 von ${sources.length}) …`);
+            let read = 0;
             for (const src of sources) {
                 try {
                     const { text, pdfBase64 } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
+                    setProgress(++read, sources.length, `Dateien werden gelesen (${read} von ${sources.length}) …`);
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
                     if (src.file) { c.file = src.file; c.fileName = src.file.name; }
@@ -449,17 +529,19 @@
                     errors.push(src.name + ': ' + e.message);
                 }
             }
-            if (!batch.length) { setStatus(errors.join(' · '), true); return; }
+            if (!batch.length) { setProgress(0, 0); setStatus(errors.join(' · '), true); return; }
             candidates.push(...batch);
+            batch.forEach(c => { c.step = STEP_TEXT.read; });
             selectedId = batch[0].id;
             render();
 
             let done = 0;
-            const progress = () => setStatus((useAi ? 'Claude wertet aus: ' : 'Ausgewertet: ') + done + ' von ' + batch.length + ' …');
+            const progress = () => setProgress(done, batch.length, `${done} von ${batch.length} ausgewertet` + (useAi ? ' (mit Claude)' : ''));
             progress();
             await pool(batch, useAi ? CONCURRENCY : 1, async c => {
                 await analyzeCandidate(c, useAi);
                 c.loading = false;
+                c.step = '';
                 if (c.aiError) errors.push(c.name + ': KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet');
                 if (!c.entries.length) errors.push(c.name + ': keine Zeiträume erkannt – bitte manuell ergänzen');
                 done++;
@@ -467,7 +549,10 @@
                 renderOverview();
                 if (c.id === selectedId) renderDetail();
             });
-            setStatus(batch.length + ' Lebenslauf/-läufe ausgewertet.' + (errors.length ? ' ' + errors.join(' · ') : ''), false);
+            setProgress(0, 0);
+            if (errors.length) errors.forEach(e => toast(e, 'warn', { ms: 9000 }));
+            toast(batch.length === 1 ? `${batch[0].name} ausgewertet.` : `${batch.length} Lebensläufe ausgewertet.`, 'ok');
+            $('#status').textContent = '';
             render();
             $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
@@ -567,9 +652,25 @@
                 fourEyes: !!settings.fourEyes
             }))(reviewState(c)),
             chf, fmtNum,
+            print: settings.print || {},
             timeline: timelineHtml(c, r)
         };
     }
+
+    // --- Druckvorschau ---
+    let printHtml = '';
+    /** Zeigt Bericht oder Lohnblatt als Vorschau; gedruckt wird erst mit «Drucken / als PDF speichern». */
+    function previewPrint(title, html) {
+        printHtml = html;
+        $('#printTitle').textContent = `${title} – Vorschau`;
+        $('#printPreview').innerHTML = html;
+        const n = $('#printPreview').querySelectorAll('.r-page').length;
+        $('#printHint').textContent = `${n} Seite${n === 1 ? '' : 'n'} · A4`;
+        $('#printDialog').showModal();
+        $('#printPreview').scrollTop = 0;
+    }
+    $('#printGo').addEventListener('click', () => { $('#printDialog').close(); CVReport.printPages(printHtml); });
+    ['#printClose', '#printCancel'].forEach(s => $(s).addEventListener('click', () => $('#printDialog').close()));
 
     // --- Rendering ---
     function catOptions(selected, includeSpecial) {
@@ -598,6 +699,10 @@
         if (storeActive()) $('#privacy').innerHTML += `<br>${icon('database')} Lebensläufe und Auswertungen werden in eurer Datenbank gespeichert${store.keepDays ? ` und nach ${store.keepDays} Tagen ohne Änderung gelöscht` : ''}.`
             + (store.error ? `<br><span class="warn store-warn">${icon('alert')} ${esc(store.error)}</span>` : '');
         else if (store.available) $('#privacy').innerHTML += `<br><span class="warn store-warn">${icon('alert')} Personen werden nicht gespeichert und sind nach dem Neuladen weg: ${esc(storeReason())}</span>`;
+        // Einstieg: ohne Personen die Ablagefläche gross und die drei Schritte zeigen
+        const empty = candidates.length === 0;
+        $('#onboarding').hidden = !empty;
+        document.querySelector('.upload-card').classList.toggle('empty-start', empty);
         renderOverview();
         renderDetail();
         if (view === 'applicants') { renderApplicants(); renderCv(); }
@@ -692,11 +797,18 @@
     });
     document.querySelectorAll('[data-posfilter]').forEach(b => b.addEventListener('click', () => { posFilter = b.dataset.posfilter; renderPositions(); }));
     $('#deletePosition').addEventListener('click', () => {
-        if (!editingPos || !confirm(`Stelle «${editingPos.title}» löschen? Die Bewerbenden bleiben erhalten, sind aber keiner Stelle mehr zugeordnet.`)) return;
-        settings.positions = settings.positions.filter(p => p !== editingPos);
-        candidates.forEach(c => { if (c.positionId === editingPos.id) c.positionId = ''; });
+        if (!editingPos) return;
+        const pos = editingPos, idx = settings.positions.indexOf(pos);
+        const linked = candidates.filter(c => c.positionId === pos.id);
+        settings.positions = settings.positions.filter(p => p !== pos);
+        linked.forEach(c => { c.positionId = ''; });
         $('#positionDialog').close('deleted');
         savePositions();
+        undoable(`Stelle «${pos.title}» gelöscht${linked.length ? ` – ${linked.length} Bewerbende ohne Stelle` : ''}.`, () => {
+            settings.positions.splice(Math.min(idx, settings.positions.length), 0, pos);
+            linked.forEach(c => { c.positionId = pos.id; });
+            savePositions();
+        });
     });
     $('#positionDialog').addEventListener('close', () => {
         if ($('#positionDialog').returnValue !== 'save') return;
@@ -726,6 +838,41 @@
     }
 
     let applicantStatus = 'alle', applicantPos = '';
+    // Sortierung der Bewerbenden-Tabelle (bleibt im Browser gespeichert)
+    const SORT_KEY = 'cvrechner.sort.v1';
+    let applicantSort = (() => { try { return JSON.parse(storageGet(SORT_KEY)) || { key: 'created', dir: 'desc' }; } catch (e) { return { key: 'created', dir: 'desc' }; } })();
+    /** Sortierwert einer Person für die Spalte key. */
+    function sortValue(c, key) {
+        if (c.loading) return null;
+        const r = computeFor(c), pl = placementFor(c, r), sal = salaryOf(c, pl);
+        switch (key) {
+            case 'status': return P.STATUSES.findIndex(s => s.id === (c.status || 'neu'));
+            case 'name': return (c.name || '').toLowerCase();
+            case 'function': return tplOf(c).name.toLowerCase();
+            case 'years': return r.creditedYears;
+            case 'placement': return pl ? pl.fixed ? 0 : pl.cls * 100 + pl.stage : -1;
+            case 'salary': return sal ? sal.total : -1;
+            default: return c.createdAt || '';
+        }
+    }
+    function sortApplicants(list) {
+        const { key, dir } = applicantSort;
+        const vals = new Map(list.map(c => [c.id, sortValue(c, key)]));
+        const sign = dir === 'asc' ? 1 : -1;
+        return list.slice().sort((a, b) => {
+            const va = vals.get(a.id), vb = vals.get(b.id);
+            if (va === null) return 1; if (vb === null) return -1;
+            return (typeof va === 'string' ? va.localeCompare(vb, 'de') : va - vb) * sign;
+        });
+    }
+    document.querySelector('.applicants-table thead').addEventListener('click', e => {
+        const b = e.target.closest('[data-sort]');
+        if (!b) return;
+        const key = b.dataset.sort;
+        applicantSort = { key, dir: applicantSort.key === key && applicantSort.dir === 'asc' ? 'desc' : applicantSort.key === key ? 'asc' : (key === 'name' || key === 'function' || key === 'status' ? 'asc' : 'desc') };
+        storageSet(SORT_KEY, JSON.stringify(applicantSort));
+        renderApplicants();
+    });
     const statusName = id => (P.STATUSES.find(x => x.id === (id || 'neu')) || {}).name || '';
     const statusPill = c => `<span class="status-pill st-${esc(c.status || 'neu')}">${esc(statusName(c.status))}</span>`;
     function reviewPill(c) {
@@ -741,7 +888,13 @@
         const hay = c => [c.name, tplOf(c).name, c.fileName, c.hinweise, c.birth, statusName(c.status), c.positionId && positionOf(c.positionId) ? positionOf(c.positionId).title : '', ...(c.entries || []).map(e => e.title + ' ' + e.details), c.text].join(' ').toLowerCase();
         const byPos = c => !applicantPos || (applicantPos === '__none' ? !c.positionId : c.positionId === applicantPos);
         const base = candidates.slice().reverse().filter(c => byPos(c) && terms.every(t => hay(c).includes(t)));
-        const list = base.filter(c => applicantStatus === 'alle' || (c.status || 'neu') === applicantStatus);
+        const list = sortApplicants(base.filter(c => applicantStatus === 'alle' || (c.status || 'neu') === applicantStatus));
+        document.querySelectorAll('.applicants-table [data-sort]').forEach(b => {
+            const on = b.dataset.sort === applicantSort.key;
+            b.classList.toggle('asc', on && applicantSort.dir === 'asc');
+            b.classList.toggle('desc', on && applicantSort.dir === 'desc');
+            b.closest('th').setAttribute('aria-sort', on ? (applicantSort.dir === 'asc' ? 'ascending' : 'descending') : 'none');
+        });
         // Filter: Status mit Anzahl, Stelle
         $('#statusFilter').innerHTML = [{ id: 'alle', name: 'Alle' }].concat(P.STATUSES).map(st => {
             const n = st.id === 'alle' ? base.length : base.filter(c => (c.status || 'neu') === st.id).length;
@@ -752,25 +905,32 @@
         $('#positionFilter').innerHTML = `<option value="">alle Stellen</option>${positions.map(p => `<option value="${esc(p.id)}"${p.id === applicantPos ? ' selected' : ''}>${esc(p.title)}${p.status !== 'offen' ? ` (${p.status})` : ''}</option>`).join('')}<option value="__none"${applicantPos === '__none' ? ' selected' : ''}>ohne Stelle</option>`;
         renderCompare(applicantPos && applicantPos !== '__none' ? list : []);
         const filtered = terms.length || applicantPos || applicantStatus !== 'alle';
-        $('#applicantsInfo').innerHTML = (filtered ? `${list.length} von ${candidates.length} Bewerbenden.` : `${candidates.length} Bewerbende, neueste zuerst.`)
+        const sortName = { status: 'Status', name: 'Name', function: 'Funktion', years: 'anrechenbaren Jahren', placement: 'Einreihung', salary: 'Jahreslohn', created: 'Datum' }[applicantSort.key];
+        $('#applicantsInfo').innerHTML = (filtered ? `${list.length} von ${candidates.length} Bewerbenden` : `${candidates.length} Bewerbende`) + `, sortiert nach ${sortName} (${applicantSort.dir === 'asc' ? 'aufsteigend' : 'absteigend'}).`
             + (storeActive() ? store.keepDays ? ` Gespeicherte Personen werden ${store.keepDays} Tage nach der letzten Änderung samt Lebenslauf gelöscht.` : ''
                 : ` <span class="warn">${icon('alert')} Personen werden nicht gespeichert: ${esc(storeReason())}</span>`);
         $('#applicantsBody').innerHTML = list.length ? list.map(c => {
-            if (c.loading) return `<tr data-select="${c.id}"><td><strong>${esc(c.name)}</strong></td><td colspan="7" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td></tr>`;
-            const r = computeFor(c), pl = placementFor(c, r), n = overrideCount(c);
+            if (c.loading) return `<tr data-select="${c.id}"><td><strong>${esc(c.name)}</strong></td><td colspan="8" class="loading-cell"><span class="spinner"></span> <span data-step="${c.id}">${esc(c.step || 'wird ausgewertet …')}</span></td></tr>`;
+            const r = computeFor(c), pl = placementFor(c, r), n = overrideCount(c), sal = salaryOf(c, pl);
             const dup = P.findDuplicates(candidates).has(c.id);
-            return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
+            return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}" tabindex="0">
                 <td>${statusPill(c)} ${reviewPill(c)}</td>
                 <td><strong>${esc(c.name)}</strong>${dup ? ` <span class="badge" title="Mögliche Doppelbewerbung">${icon('alert')} doppelt?</span>` : ''}${c.source === 'ki' ? ` <span class="mini-ai" title="ausgewertet mit Claude">${icon('sparkles', 'ausgewertet mit Claude')}</span>` : ''}${n ? ` <span class="badge badge-manual">${icon('pencil')} ${n} manuell</span>` : ''}
                     ${c.hasFile || c.file ? `<div class="details">${icon('file')} ${esc(c.fileName || 'Lebenslauf')}</div>` : ''}</td>
                 <td>${esc(tplOf(c).name)}${c.positionId && positionOf(c.positionId) ? `<div class="details">${icon('briefcase')} ${esc(positionOf(c.positionId).title)}</div>` : ''}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong> J.</td>
                 <td class="num">${pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : '–'}</td>
+                <td class="num">${sal ? esc(chf(sal.total)) : '–'}</td>
                 <td>${fmtDate(c.createdAt)}</td>
                 <td>${retentionBadge(c)}</td>
-                <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Löschen" aria-label="Löschen">${icon('x')}</button></td>
+                <td class="num"><span class="row-actions">
+                    <select class="status-mini st-${esc(c.status || 'neu')}" data-rowstatus="${c.id}" aria-label="Status von ${esc(c.name)} ändern" title="Status ändern">${P.STATUSES.map(st => `<option value="${st.id}"${(c.status || 'neu') === st.id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select>
+                    ${pl ? `<button class="btn-icon" type="button" data-rowsalary="${c.id}" title="Lohnblatt (PDF)" aria-label="Lohnblatt von ${esc(c.name)}">${icon('file')}</button>` : ''}
+                    ${c.positionId ? `<button class="btn-icon" type="button" data-rowcompare="${esc(c.positionId)}" title="Mit den anderen Bewerbenden dieser Stelle vergleichen" aria-label="Vergleichen">${icon('compare')}</button>` : ''}
+                    <button class="btn-icon" type="button" data-remove="${c.id}" title="Löschen" aria-label="${esc(c.name)} löschen">${icon('x')}</button>
+                </span></td>
             </tr>`;
-        }).join('') : `<tr><td colspan="8" class="empty">${candidates.length ? 'Keine Bewerbenden gefunden.' : 'Noch keine Bewerbenden ausgewertet.'}</td></tr>`;
+        }).join('') : `<tr><td colspan="9" class="empty">${candidates.length ? 'Keine Bewerbenden gefunden.' : 'Noch keine Bewerbenden ausgewertet.'}</td></tr>`;
     }
 
     /** Vergleich der Bewerbenden einer Stelle nebeneinander. */
@@ -830,25 +990,50 @@
         }
     }
 
-    /** Zeigt den Lebenslauf der gewählten Person (PDF als Seiten, sonst Download und erkannter Text). */
+    /**
+     * Zeigt den Lebenslauf der gewählten Person. Das PDF ist eingeklappt und wird erst beim Aufklappen
+     * gezeichnet (als Seiten); sonst Download und erkannter Text.
+     */
+    let cvLoadedId = null; // Person, deren PDF-Seiten bereits gezeichnet sind
     async function renderCv() {
         const c = view === 'applicants' ? candidates.find(x => x.id === selectedId) : null;
         $('#cvCard').hidden = !c;
         if (!c || c.id === cvShownId) return;
         cvShownId = c.id;
-        const textHtml = c.text && c.text.trim() ? `<details class="rawtext" ${c.hasFile || c.file ? '' : 'open'}><summary>Erkannter Text</summary><pre>${esc(c.text)}</pre></details>` : '';
+        cvLoadedId = null;
         const isPdf = /\.pdf$/i.test(c.fileName || '') || (c.file && c.file.type === 'application/pdf');
+        const det = $('#cvDetails');
+        det.open = false;
         $('#cvActions').innerHTML = '';
+        $('#cvSummary').innerHTML = (c.hasFile || c.file)
+            ? `${icon('file')} Lebenslauf anzeigen <span class="hint">${esc(c.fileName || '')}${isPdf ? ' (PDF)' : ''}</span>`
+            : `${icon('file')} Erkannten Text anzeigen`;
+        $('#cvViewer').innerHTML = '';
         if (!c.hasFile && !c.file) {
-            $('#cvViewer').innerHTML = `<p class="hint">Keine Datei gespeichert (Text eingefügt oder vor dem Speichern der Dateien ausgewertet).</p>${textHtml}`;
+            $('#cvViewer').innerHTML = `<p class="hint">Keine Datei gespeichert (Text eingefügt oder vor dem Speichern der Dateien ausgewertet).</p>${c.text && c.text.trim() ? `<pre class="rawtext-pre">${esc(c.text)}</pre>` : ''}`;
             return;
         }
+        // Download-Knopf sofort, wenn die Datei schon im Speicher liegt; sonst beim Aufklappen
+        if (c.file) {
+            const url = await fileUrlOf(c);
+            if (cvShownId === c.id) $('#cvActions').innerHTML = cvActionsHtml(c, url, isPdf);
+        }
+    }
+    const cvActionsHtml = (c, url, isPdf) => `<a class="btn btn-ghost btn-sm" href="${url}" download="${esc(c.fileName || 'lebenslauf')}">${icon('download')} Herunterladen</a>`
+        + (isPdf ? `<a class="btn btn-ghost btn-sm" href="${url}" target="_blank" rel="noopener">${icon('external')} In neuem Tab öffnen</a>` : '');
+    /** Beim Aufklappen: Datei laden und PDF-Seiten zeichnen (nur einmal pro Person). */
+    $('#cvDetails').addEventListener('toggle', () => { if ($('#cvDetails').open) loadCv(); });
+    async function loadCv() {
+        const c = candidates.find(x => x.id === cvShownId);
+        if (!c || cvLoadedId === c.id || (!c.hasFile && !c.file)) return;
+        cvLoadedId = c.id;
+        const textHtml = c.text && c.text.trim() ? `<details class="rawtext"><summary>Erkannter Text</summary><pre>${esc(c.text)}</pre></details>` : '';
+        const isPdf = /\.pdf$/i.test(c.fileName || '') || (c.file && c.file.type === 'application/pdf');
         $('#cvViewer').innerHTML = '<p class="hint"><span class="spinner"></span> Lebenslauf wird geladen …</p>';
         try {
             const url = await fileUrlOf(c);
             if (cvShownId !== c.id) return; // inzwischen andere Person gewählt
-            $('#cvActions').innerHTML = `<a class="btn btn-ghost btn-sm" href="${url}" download="${esc(c.fileName || 'lebenslauf')}">${icon('download')} Herunterladen</a>`
-                + (isPdf ? `<a class="btn btn-ghost btn-sm" href="${url}" target="_blank" rel="noopener">${icon('external')} In neuem Tab öffnen</a>` : '');
+            $('#cvActions').innerHTML = cvActionsHtml(c, url, isPdf);
             if (isPdf && window.pdfjsLib) {
                 $('#cvViewer').innerHTML = `<div class="cv-pages" aria-label="Lebenslauf von ${esc(c.name)}"></div>${textHtml}`;
                 await renderPdfPages(await (await fetch(url)).arrayBuffer(), $('#cvViewer .cv-pages'), () => cvShownId === c.id);
@@ -858,9 +1043,10 @@
                 $('#cvViewer').innerHTML = `<p class="hint">Word-Dateien lassen sich im Browser nicht anzeigen – bitte herunterladen. Unten steht der erkannte Text.</p>${textHtml}`;
             }
         } catch (err) {
-            if (cvShownId === c.id) $('#cvViewer').innerHTML = `<p class="hint warn">Lebenslauf konnte nicht geladen werden: ${esc(err.message)}</p>${textHtml}`;
+            if (cvShownId === c.id) { cvLoadedId = null; $('#cvViewer').innerHTML = `<p class="hint warn">Lebenslauf konnte nicht geladen werden: ${esc(err.message)}</p>${textHtml}`; }
         }
     }
+
 
     // --- Auswertungen in der Datenbank (api/candidates.php) ---
     let store = { available: false, enabled: false, keepDays: 0, problem: '', error: '' };
@@ -972,7 +1158,7 @@
             if (c.loading) {
                 return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
                     <td><strong>${esc(c.name)}</strong></td><td>${esc(tplOf(c).name)}</td>
-                    <td colspan="5" class="loading-cell"><span class="spinner"></span> wird ausgewertet …</td><td></td></tr>`;
+                    <td colspan="5" class="loading-cell"><span class="spinner"></span> <span data-step="${c.id}">${esc(c.step || 'wird ausgewertet …')}</span></td><td></td></tr>`;
             }
             const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
@@ -1059,12 +1245,96 @@
             + '</p>';
     }
 
+    // --- Personenkarte: Kopf, Vorher/Nachher, «Warum?», einklappbare Abschnitte ---
+    const SECTIONS_KEY = 'cvrechner.sections.v1';
+    let openSections = (() => { try { return JSON.parse(storageGet(SECTIONS_KEY)) || {}; } catch (e) { return {}; } })();
+    /** Einklappbarer Abschnitt der Personenkarte; der Zustand bleibt im Browser gespeichert. */
+    function section(id, title, html, defaultOpen, count) {
+        const open = openSections[id] !== undefined ? openSections[id] : defaultOpen;
+        return `<details class="section" data-section="${id}" ${open ? 'open' : ''}><summary>${esc(title)}${count ? ` <span class="count">${esc(count)}</span>` : ''}</summary>${html}</details>`;
+    }
+    /** Auswertung, wie sie mit der vorgeschlagenen Funktion aussähe (für Vorher/Nachher nach manueller Wahl). */
+    function suggestedView(c) {
+        const sg = c.suggestion;
+        if (!sg || sg.id === c.templateId || !settings.templates.some(t => t.id === sg.id)) return null;
+        const alt = Object.assign({}, c, { templateId: sg.id, baseTemplateId: '' });
+        const r = computeFor(alt), pl = placementFor(alt, r);
+        return { tpl: tplOf(alt), r, pl, sal: salaryOf(alt, pl) };
+    }
+    /** Kopf der Personenkarte: Funktion, anrechenbare Jahre, Einreihung mit Stufenbalken, Lohn. */
+    function heroHtml(c, r, t, pl) {
+        const sal = salaryOf(c, pl);
+        const was = suggestedView(c);
+        const fnWas = was ? `<span class="was" title="Vom Lebenslauf vorgeschlagen, manuell geändert">${esc(was.tpl.name)}</span>` : '';
+        const fnExtra = was ? `<span class="was-note">manuell gewählt statt Vorschlag</span>` : c.suggestion && c.suggestion.id === c.templateId ? `<span class="was-note">${icon('sparkles')} aus dem Lebenslauf vorgeschlagen (${c.suggestion.source === 'ki' ? 'Claude' : 'Stichwörter'})</span>` : c.positionId && positionOf(c.positionId) ? `<span class="was-note">${icon('briefcase')} ${esc(positionOf(c.positionId).title)}</span>` : '';
+        let placeHtml, placeExtra = '';
+        if (!pl) { placeHtml = '<span class="value">–</span>'; placeExtra = '<div class="extra">Keine Lohnklassen bei dieser Funktion</div>'; }
+        else if (pl.fixed) { placeHtml = '<span class="value">Fixer Lohn</span>'; placeExtra = '<div class="extra">gemäss Funktion, unabhängig von der Erfahrung</div>'; }
+        else {
+            const wasPl = was && was.pl && !was.pl.fixed && (was.pl.cls !== pl.cls || was.pl.stage !== pl.stage) ? `<span class="was">LK ${was.pl.cls} / St. ${was.pl.stage}</span>` : '';
+            placeHtml = `<div class="value">LK ${pl.cls} <span class="unit">·</span> Stufe ${pl.stage}${wasPl}</div>`;
+            const row = pl.table && pl.table.classes ? pl.table.classes[pl.cls] : null;
+            const pct = Math.round(pl.stage / Math.max(1, pl.maxStage) * 100);
+            placeExtra = `<div class="range"><div class="range-track"><div class="range-fill" style="width:${pct}%"></div></div>
+                <div class="range-text"><span>Stufe ${pl.stage} von ${pl.maxStage}</span>${row && row.length ? `<span title="Spanne der Lohnklasse ${pl.cls} bei 100 %">${esc(P.formatChf(row[0], { plain: true }))} – ${esc(P.formatChf(row[row.length - 1], { plain: true }))}</span>` : ''}</div></div>`;
+        }
+        const p = pensumOf(c, t);
+        const wasSal = was && was.sal && sal && Math.round(was.sal.total) !== Math.round(sal.total) ? `<span class="was">${esc(chf(was.sal.total))}</span>` : '';
+        const salHtml = sal ? `<div class="value">${esc(chf(sal.total))}${wasSal}</div><div class="extra">Monatslohn ${esc(chf(sal.monthly))} · ${t.payments} Auszahlungen${sal.allowances.length ? ` · inkl. ${sal.allowances.map(a => esc(a.label)).join(', ')}` : ''}</div>`
+            : `<div class="value">–</div><div class="extra">${pl && !pl.table ? 'Keine Gehaltstabelle hinterlegt' : pl ? 'Lohnklasse nicht in der Tabelle' : 'Kein Lohn berechenbar'}</div>`;
+        return `<div class="hero">
+            <div class="hero-box hero-fn"><div class="label">Funktion</div><div class="value">${esc(t.name)}${fnWas}</div><div class="extra">${fnExtra}</div></div>
+            <div class="hero-box"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit"> J.</span></div><div class="extra">${fmtYM(r.creditedYears)}${r.rounded || r.capped ? ` · ungerundet ${fmt(r.exactYears)} J.` : ''}</div></div>
+            <div class="hero-box"><div class="label">Einreihung</div>${placeHtml}${placeExtra}</div>
+            <div class="hero-box hero-salary"><div class="label">Jahreslohn bei ${t.lessonsFull ? `${fmtNum(c.newLessons ?? t.lessonsFull)} Lekt.` : `${fmtNum(p)} %`}</div>${salHtml}</div>
+        </div>`;
+    }
+    /** «Warum diese Einreihung?» – nachvollziehbar: Stichwörter, gewertete Ausbildung, Stufe, Aufstieg, Korrektur, Zulagen, Tabelle. */
+    function whyHtml(c, r, t, pl) {
+        const items = [];
+        const li = (k, v) => items.push(`<li><b>${esc(k)}</b><span>${v}</span></li>`);
+        const ranked = P.suggestTemplates(c.entries, settings.templates);
+        const mine = ranked.find(x => x.id === c.templateId);
+        const sg = c.suggestion;
+        let fn = '';
+        if (sg && sg.id === c.templateId && sg.source === 'ki') fn = `Claude: ${esc(sg.reason || 'passt laut Lebenslauf')}`;
+        else if (mine && mine.hits.length) fn = 'Stichwörter im Lebenslauf: ' + mine.hits.slice(0, 5).map(h => `<span class="kw">${esc(h.keyword)}</span> in «${esc(h.title)}»`).join(', ');
+        else if (c.positionId && positionOf(c.positionId)) fn = `von der Stelle «${esc(positionOf(c.positionId).title)}» übernommen`;
+        else fn = 'manuell gewählt' + (sg && sg.id !== c.templateId ? ` – vorgeschlagen war «${esc((settings.templates.find(x => x.id === sg.id) || {}).name || '')}»` : '');
+        if (sg && sg.id !== c.templateId && !fn.includes('vorgeschlagen war')) fn += ` (Vorschlag war «${esc((settings.templates.find(x => x.id === sg.id) || {}).name || '')}»)`;
+        li('Funktion', fn);
+        const edu = c.entries.map((e, i) => [e, r.perEntry[i]]).filter(([e]) => e.category === '__ausbildung' || e.category === '__zweitausbildung');
+        if (edu.length) li('Ausbildung', edu.map(([e, pe]) => `«${esc(e.title)}»${e.include && pe.factor > 0 ? ` (${pe.factor} % angerechnet)` : ' (nicht angerechnet)'}`).join(', '));
+        li('Erfahrung', formulaHtml(c, r, t));
+        if (pl && !pl.fixed) {
+            li('Stufe', `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.years + 1 > pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : ''}`);
+            const ups = t.classUpYears || [];
+            const next = ups.find(n => pl.years < n);
+            li('Lohnklasse', `Grundklasse ${t.classMin}${t.baseName ? ` (Grundfunktion «${esc(t.baseName)}» +${t.baseDelta})` : ''}${pl.ups ? `, +${pl.ups} nach ${ups.slice(0, pl.ups).join(' und ')} Jahren` : ''}${next ? ` · nächster Aufstieg nach ${next} Jahren (in ${next - pl.years} J.)` : t.classMax && t.classMax !== t.classMin && !next ? ' · höchste Klasse der Funktion erreicht' : ''}`);
+            const adj = adjustmentOf(c);
+            const open = correctionsFor(c);
+            li('Korrektur', adj ? `${esc(adj.label)} (${adj.delta > 0 ? '+' : ''}${adj.delta} Klasse${Math.abs(adj.delta) === 1 ? '' : 'n'})${(() => { const why = P.suggestCorrections(c.entries, t, settings.classAdjustments, flagsFor(c)).find(x => x.id === adj.id); return why ? ' – ' + esc(why.reason) : ' – manuell gesetzt'; })()}`
+                : open.length ? `keine – vorgeschlagen: ${open.map(x => esc(x.label)).join(', ')}` : 'keine');
+        } else if (pl && pl.fixed) li('Lohn', `Fixer Jahreslohn der Funktion, unabhängig von der Erfahrung${t.note ? '. ' + esc(t.note) : ''}`);
+        if (pl && (t.allowances || []).length) {
+            const chosen = allowancesOf(c, t);
+            li('Zulagen', chosen.length ? chosen.map(a => `${esc(a.label)} (${esc(chf(a.annual))} bei 100 %)`).join(', ') + (c.allowances === null ? ' – aufgrund der Ausbildung vorgeschlagen' : ' – manuell gewählt') : 'keine');
+        }
+        const f = flagsFor(c);
+        if (f && (f.leadershipYears || f.leadershipTraining || f.foreignDiploma || f.qualificationMatches === false)) {
+            li('Claude hat erkannt', [f.leadershipYears ? `${f.leadershipYears} Jahre Führungsverantwortung` : '', f.leadershipTraining ? 'Führungsausbildung' : '', f.foreignDiploma ? 'ausländisches Diplom' : '', f.qualificationMatches === false ? 'Ausbildung passt nicht zur Funktion' : ''].filter(Boolean).map(esc).join(', '));
+        }
+        if (pl) li('Gehaltstabelle', pl.table ? esc(tableLabel(pl.table)) + (pl.future ? ' – gilt am Stichtag noch nicht' : '') : 'keine hinterlegt');
+        if (t.note) li('Hinweis', esc(t.note));
+        return `<details class="why"><summary>Warum diese Einreihung?</summary><ul class="why-list">${items.join('')}</ul></details>`;
+    }
+
     function renderDetail() {
         const c = candidates.find(x => x.id === selectedId);
         const el = $('#detail');
         if (!c) { el.innerHTML = ''; return; }
         if (c.loading) {
-            el.innerHTML = `<div class="card"><h2>${esc(c.name)}</h2><p class="empty"><span class="spinner"></span> wird ausgewertet …</p></div>`;
+            el.innerHTML = `<div class="card"><h2>${esc(c.name)}</h2><p class="empty"><span class="spinner"></span> <span data-step="${c.id}">${esc(c.step || 'wird ausgewertet …')}</span></p></div>`;
             return;
         }
         const t = tplOf(c);
@@ -1089,7 +1359,8 @@
                 <td class="num">${pe.valid ? fmtYM(pe.months / 12) : '<span class="badge">Datum?</span>'}${e.imprecise ? '<span class="badge" title="Nur Jahreszahl angegeben – bitte Monate prüfen">ungenau</span>' : ''}</td>
                 <td class="c-small">
                     <div class="suffix"><input type="number" min="0" max="100" data-f="factorOverride" value="${auto ? '' : esc(e.factorOverride)}" placeholder="${pe.factor}" aria-label="Faktor"><em>%</em></div>
-                    ${auto ? `<div class="factor-auto" title="${esc(P.describeRule(t.rules[pe.ruleKey]))}">${esc((P.RULE_KEYS.find(k => k.id === pe.ruleKey) || {}).name || 'automatisch')}</div>` : '<div class="factor-auto">manuell</div>'}
+                    ${auto ? `<div class="factor-auto" title="${esc(P.describeRule(t.rules[pe.ruleKey]))}">${esc((P.RULE_KEYS.find(k => k.id === pe.ruleKey) || {}).name || 'automatisch')}</div>`
+                        : `<div class="factor-auto" title="Manuell überschrieben; nach den Regeln wären es ${autoFactor(e, t)} %">manuell <span class="factor-was">${autoFactor(e, t)} %</span></div>`}
                 </td>
                 <td class="num"><strong>${fmt(pe.credited / 12)}</strong></td>
                 <td><button class="btn-icon" type="button" data-del="${e.id}" title="Zeile löschen" aria-label="Zeile löschen">${icon('x')}</button></td>
@@ -1097,6 +1368,7 @@
         }).join('');
 
         const tl = timelineHtml(c, r);
+        const pl0 = placementFor(c, r);
         el.innerHTML = `<div class="card">
             <div class="detail-head">
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
@@ -1113,42 +1385,55 @@
                 </div>
             </div>
             <p class="source">${c.source === 'ki' ? `<span class="pill pill-ai">${icon('sparkles')} ausgewertet mit Claude</span>` : '<span class="pill">ausgewertet mit Regeln</span>'}
+                ${statusPill(c)} ${reviewPill(c)}
                 ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
+            ${heroHtml(c, r, t, pl0)}
             ${duplicateHtml(c)}
             ${suggestionHtml(c)}
             ${correctionsHtml(c)}
             ${c.hinweise ? `<div class="notice"><b>Hinweis:</b> ${esc(c.hinweise)}</div>` : ''}
-            <div class="stats">
+            ${!pl0 && t.note ? `<div class="notice"><b>Hinweis zur Einreihung:</b> ${esc(t.note)}</div>` : ''}
+            ${!pl0 ? `<div class="notice"><b>Keine Lohneinreihung:</b> Die Vorlage «${esc(t.name)}» hat keine Lohnklassen. Eine Vorlage des Einreihungsplans wählen oder bei dieser Vorlage «Lohnklasse von/bis» eintragen. <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Vorlage bearbeiten</button></div>` : ''}
+            ${reviewHtml(c)}
+            <div class="detail-actions">
+                <button class="btn btn-ghost btn-sm" type="button" data-action="add">${icon('plus')} Stelle hinzufügen</button>
+                <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
+                <button class="btn btn-ghost btn-sm" type="button" data-action="report">Bericht (PDF)</button>
+                ${pl0 ? `<button class="btn btn-primary btn-sm" type="button" data-action="salary">${icon('file')} Lohnblatt (PDF)</button>` : ''}
+            </div>
+            ${section('salary', 'Lohn und Einreihung', pl0 ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl0))}</b></div><div class="placement-why">${esc(placementWhy(t, pl0))}</div>
+                ${(t.allowances || []).length ? `<div class="allow-row"><span class="label">Zulagen</span>${t.allowances.map(a => `<label class="check"><input type="checkbox" data-allow="${esc(a.id)}" ${allowancesOf(c, t).includes(a) ? 'checked' : ''}> ${esc(a.label)} (${chf(a.annual)}/Jahr bei 100 %)</label>`).join('')}${c.allowances === null && allowancesOf(c, t).length ? '<span class="hint">aufgrund der Ausbildung vorgeschlagen</span>' : ''}</div>` : ''}
+                ${whyHtml(c, r, t, pl0)}
+                ${outlookHtml(c, r)}</div>` : `<div class="formula">${whyHtml(c, r, t, null)}</div>`, true, pl0 && !pl0.fixed ? `LK ${pl0.cls}, Stufe ${pl0.stage}` : '')}
+            ${section('experience', 'Erfahrung', `<div class="stats">
                 <div class="stat"><div class="label">Berufserfahrung total</div><div class="value">${fmt(r.totalYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.totalYears)}</div></div>
                 <div class="stat"><div class="label">davon als ${esc(catName(t.target))}</div><div class="value">${fmt(r.targetYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.targetYears)}</div></div>
                 <div class="stat"><div class="label">andere Berufe</div><div class="value">${fmt(r.otherYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.otherYears)}</div></div>
                 <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
-            ${!placementFor(c, r) && t.note ? `<div class="notice"><b>Hinweis zur Einreihung:</b> ${esc(t.note)}</div>` : ''}
-            ${!placementFor(c, r) ? `<div class="notice"><b>Keine Lohneinreihung:</b> Die Vorlage «${esc(t.name)}» hat keine Lohnklassen. Eine Vorlage des Einreihungsplans wählen oder bei dieser Vorlage «Lohnklasse von/bis» eintragen. <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Vorlage bearbeiten</button></div>` : ''}
-            ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div>
-                ${(t.allowances || []).length ? `<div class="allow-row"><span class="label">Zulagen</span>${t.allowances.map(a => `<label class="check"><input type="checkbox" data-allow="${esc(a.id)}" ${allowancesOf(c, t).includes(a) ? 'checked' : ''}> ${esc(a.label)} (${chf(a.annual)}/Jahr bei 100 %)</label>`).join('')}${c.allowances === null && allowancesOf(c, t).length ? '<span class="hint">aufgrund der Ausbildung vorgeschlagen</span>' : ''}</div>` : ''}
-                ${outlookHtml(c, r)}</div>` : '')(placementFor(c, r))}
-            <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>
-            ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
-            ${c.entries.length ? `<h3 class="sub-h">Stellen</h3><div class="table-scroll"><table class="table entries-table">
+            <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>`, true, `${fmt(r.creditedYears)} J. anrechenbar`)}
+            ${tl ? section('timeline', 'Zeitstrahl', tl, true) : ''}
+            ${section('entries', 'Stellen und Ausbildung', c.entries.length ? `<div class="table-scroll"><table class="table entries-table">
                 <thead><tr>
                     <th title="Anrechnen">${icon('check', 'Anrechnen')}</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
                     <th>Pensum</th><th class="num">Dauer</th><th title="Anrechnung pro Monat nach den Regeln der Vorlage; überschreibbar">Anrechnung</th><th class="num">Angerechnet</th><th></th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
-            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>'}
-            ${reviewHtml(c)}
-            <div class="detail-actions">
-                <button class="btn btn-ghost btn-sm" type="button" data-action="add">+ Stelle hinzufügen</button>
-                <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
-                <button class="btn btn-ghost btn-sm" type="button" data-action="report">Bericht (PDF)</button>
-                ${placementFor(c, r) ? `<button class="btn btn-primary btn-sm" type="button" data-action="salary">${icon('file')} Lohnblatt (PDF)</button>` : ''}
-            </div>
-            ${c.text.trim() ? `<details class="rawtext"><summary>Erkannter Text anzeigen</summary><pre>${esc(c.text)}</pre></details>` : ''}
+            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>', true, `${c.entries.length} Einträge${overrideCount(c) ? `, ${overrideCount(c)} manuell` : ''}`)}
+            ${c.text.trim() ? section('text', 'Erkannter Text', `<pre class="rawtext-pre">${esc(c.text)}</pre>`, false) : ''}
         </div>`;
     }
+    /** Anrechnung nach den Regeln (ohne manuelle Überschreibung), in %. */
+    const autoFactor = (e, t) => Math.round(P.weightFor(Object.assign({}, e, { factorOverride: null }), t) * 10) / 10;
+    // Auf-/Zuklappen der Abschnitte merken
+    $('#detail').addEventListener('toggle', e => {
+        const d = e.target.closest('details.section');
+        if (!d) return;
+        openSections[d.dataset.section] = d.open;
+        storageSet(SECTIONS_KEY, JSON.stringify(openSections));
+    }, true);
+
 
     // --- Tooltip für den Zeitstrahl ---
     const tip = document.createElement('div');
@@ -1209,20 +1494,35 @@
         processSources([{ name: ex.name, text: ex.text, fixedName: true }]);
     });
 
-    /** Person entfernen; gespeicherte Personen werden nach Rückfrage auch in der Datenbank gelöscht. */
+    /**
+     * Person entfernen – sofort aus der Liste, 8 Sekunden lang «Rückgängig». Erst danach wird sie
+     * (falls gespeichert) endgültig aus der Datenbank gelöscht.
+     */
+    const pendingRemoval = new Set(); // Personen, deren Löschung noch rückgängig gemacht werden kann
     function removeCandidate(id) {
         const i = candidates.findIndex(c => c.id === id);
         if (i < 0) return;
-        if (savedJson.has(id)) {
-            if (!confirm(`«${candidates[i].name}» endgültig löschen? Auswertung und Lebenslauf werden auch aus der Datenbank entfernt.`)) return;
-            storeRequest('DELETE', '?id=' + encodeURIComponent(id)).then(() => savedJson.delete(id))
-                .catch(err => setStatus('Konnte nicht aus der Datenbank gelöscht werden: ' + err.message, true));
-        }
+        const c = candidates[i];
+        const wasSelected = selectedId === id;
         candidates.splice(i, 1);
-        if (fileUrls.has(id)) { URL.revokeObjectURL(fileUrls.get(id)); fileUrls.delete(id); }
+        pendingRemoval.add(id);
         if (selectedId === id) selectedId = view === 'main' ? candidates[candidates.length - 1]?.id || null : null;
         render();
+        const saved = savedJson.has(id);
+        undoable(`«${c.name}» entfernt${saved ? ' – wird in 8 Sekunden endgültig gelöscht' : ''}.`, () => {
+            pendingRemoval.delete(id);
+            candidates.splice(Math.min(i, candidates.length), 0, c);
+            if (wasSelected) selectedId = id;
+            render();
+        }, () => {
+            pendingRemoval.delete(id);
+            if (fileUrls.has(id)) { URL.revokeObjectURL(fileUrls.get(id)); fileUrls.delete(id); }
+            if (!saved) return;
+            storeRequest('DELETE', '?id=' + encodeURIComponent(id)).then(() => savedJson.delete(id))
+                .catch(err => toast(`«${c.name}» konnte nicht aus der Datenbank gelöscht werden: ${err.message}`, 'error'));
+        });
     }
+
 
     // --- Events: Übersicht ---
     $('#overviewBody').addEventListener('click', e => {
@@ -1235,7 +1535,7 @@
     });
     $('#reportAll').addEventListener('click', () => {
         const ready = candidates.slice(-OVERVIEW_MAX).reverse().filter(c => !c.loading);
-        if (ready.length) CVReport.print(ready.map(buildView));
+        if (ready.length) previewPrint('Berichte', ready.map(c => CVReport.page(buildView(c))).join(''));
     });
 
     // --- Events: Detail ---
@@ -1331,11 +1631,12 @@
             const inputs = detail.querySelectorAll('input[data-f="title"]');
             inputs[inputs.length - 1]?.focus();
         } else if (act.dataset.action === 'report') {
-            CVReport.print([buildView(c)]);
+            previewPrint('Bericht', CVReport.page(buildView(c)));
         } else if (act.dataset.action === 'salary') {
-            CVReport.printSalarySheet(buildView(c));
+            previewPrint('Lohnblatt', CVReport.salaryPage(buildView(c)));
         } else if (act.dataset.action === 'reparse') {
-            if (!confirm('Lebenslauf neu auswerten? Manuelle Änderungen an den Stellen gehen verloren.')) return;
+            // Vorherigen Stand aufbewahren, damit die Neuauswertung rückgängig gemacht werden kann
+            const before = clone({ entries: c.entries, hinweise: c.hinweise, aiFlags: c.aiFlags, suggestion: c.suggestion, templateId: c.templateId, autoTemplate: c.autoTemplate, baseTemplateId: c.baseTemplateId, name: c.name, birth: c.birth, source: c.source, model: c.model, aiError: c.aiError });
             withBusy(async () => {
                 let useAi = aiActive() && (await ensurePrivacyAck());
                 // Gespeicherte PDF-Datei wieder an Claude geben (liest auch Bilder und eingescannte Seiten)
@@ -1351,11 +1652,15 @@
                 render();
                 await analyzeCandidate(c, useAi);
                 c.loading = false;
-                setStatus(c.aiError ? 'KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet' : '', !!c.aiError);
+                c.step = '';
+                $('#status').textContent = '';
+                if (c.aiError) toast('KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet', 'warn');
                 render();
+                undoable(`${c.name} neu ausgewertet${overrideCount({ entries: before.entries }) ? ' – manuelle Anpassungen ersetzt' : ''}.`, () => { Object.assign(c, clone(before)); render(); });
             });
         }
     });
+
 
     // --- CSV-Export ---
     $('#exportCsv').addEventListener('click', () => {
@@ -1569,6 +1874,11 @@
                         <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
                     ${numField('Lektionen bei 100 %', 'lessonsFull', t.lessonsFull, { unit: 'Lekt.', step: 0.5, placeholder: 'Pensum in %' })}
                 </div>
+                <div class="test-calc" aria-label="Testrechner">
+                    <label class="field"><span>Testrechner: Erfahrung</span><div class="suffix"><input type="number" data-tc="years" min="0" max="60" step="0.5" value="${testCalc.years}"><em>J.</em></div></label>
+                    <label class="field"><span>Pensum</span><div class="suffix"><input type="number" data-tc="pensum" min="1" max="100" step="1" value="${testCalc.pensum}"><em>%</em></div></label>
+                    <div class="test-calc-result" data-tcres>${testCalcHtml(t)}</div>
+                </div>
                 <div class="sub-card">
                     <div class="card-head-row"><h5>Zulagen</h5><button class="btn btn-ghost btn-sm" type="button" data-addal>${icon('plus')} Zulage</button></div>
                     ${(t.allowances || []).length ? `<div class="al-list">${t.allowances.map(a => `<div class="al-row" data-al="${esc(a.id)}">
@@ -1597,6 +1907,34 @@
                 <label class="field"><span>Hinweis zur Einreihung (erscheint beim Lohnvorschlag und im Bericht)</span><textarea rows="3" data-t="note">${esc(t.note || '')}</textarea></label>`)}
         </section>`;
     }
+
+    /** Testrechner im Funktions-Editor: zeigt sofort, was die Einstellungen für eine Beispielperson ergeben. */
+    const testCalc = { years: 8, pensum: 80 };
+    function testCalcHtml(t) {
+        const e = P.effectiveTemplate(t, draft.templates);
+        if (e.fixedAnnual) return `<b>${esc(chf(+e.fixedAnnual))}</b> pro Jahr bei 100 % – fixer Lohn, unabhängig von der Erfahrung.<span class="hint">Bei ${testCalc.pensum} %: ${esc(chf(+e.fixedAnnual * testCalc.pensum / 100))}</span>`;
+        if (!e.classMin) return '<span class="hint">Keine Lohnklassen eingetragen – ohne «Lohnklasse von» gibt es keine Einreihung.</span>';
+        const sel = P.selectSalaryTable(draft.salaryTables, e);
+        const pl = P.placement(testCalc.years, e, null, sel.table);
+        if (!pl) return '';
+        let s = `<b>Lohnklasse ${pl.cls}, Stufe ${pl.stage}</b> bei ${fmtNum(testCalc.years)} Jahren Erfahrung`;
+        if (pl.ups) s += ` (+${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} durch Aufstieg)`;
+        if (pl.salary) {
+            const p = testCalc.pensum / 100;
+            s += `<br>Jahreslohn ${esc(chf(pl.salary))} bei 100 %, <b>${esc(chf(pl.salary * p))}</b> bei ${testCalc.pensum} % · Monatslohn ${esc(chf(pl.salary * p / (e.payments || 13)))} (${e.payments || 13} Auszahlungen)`;
+            s += `<span class="hint">Gehaltstabelle ${esc(tableLabel(sel.table))}${sel.future ? ' – gilt am Stichtag noch nicht' : ''}${(e.allowances || []).length ? ' · Zulagen nicht eingerechnet' : ''}</span>`;
+        } else s += `<span class="hint">${sel.table ? `Lohnklasse ${pl.cls} steht nicht in der Gehaltstabelle «${esc(sel.table.name)}»` : 'Keine Gehaltstabelle hinterlegt – Lohn kann nicht berechnet werden'}</span>`;
+        return s;
+    }
+    $('#tplList').addEventListener('input', e => {
+        if (e.target.dataset.tc) {
+            testCalc[e.target.dataset.tc] = e.target.dataset.tc === 'years' ? Math.max(0, +e.target.value || 0) : Math.max(1, Math.min(100, +e.target.value || 100));
+        } else if (!e.target.closest('.fn-panel[data-tpanel="pay"]') && !e.target.closest('.fn-panel[data-tpanel="general"]')) return;
+        readSettingsForm();
+        const t = draft.templates.find(x => x.id === tplSel);
+        const res = document.querySelector('#tplList [data-tcres]');
+        if (t && res) res.innerHTML = testCalcHtml(t);
+    });
 
     /** Korrekturen der Lohnklasse (z. B. −1 ohne Ausbildung) mit Regel für den automatischen Vorschlag. */
     function renderAdjList() {
@@ -1679,8 +2017,203 @@
         $('#retentionDays').value = draft.retentionDays ?? '';
         $('#retentionByStatus').innerHTML = P.STATUSES.map(st => `<label class="field"><span>${esc(st.name)}</span><div class="suffix"><input type="number" min="0" step="1" data-rs="${st.id}" value="${draft.retentionByStatus?.[st.id] ?? ''}" placeholder="–"><em>Tage</em></div></label>`).join('');
         $('#fourEyes').checked = !!draft.fourEyes;
+        renderPrintForm();
         updateSettingsNav();
     }
+    // --- Druckeinstellungen (Logo, Organisation, Fusszeile) ---
+    function renderPrintForm() {
+        const p = draft.print || (draft.print = { org: '', footer: '', logo: '' });
+        $('#printOrg').value = p.org || '';
+        $('#printFooter').value = p.footer || '';
+        $('#printLogoPreview').hidden = !p.logo;
+        $('#printLogoPreview').src = p.logo || '';
+        $('#printLogoRemove').hidden = !p.logo;
+    }
+    $('#printLogo').addEventListener('change', e => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
+        if (f.size > 300 * 1024) { toast('Das Logo ist grösser als 300 KB – bitte verkleinern.', 'warn'); return; }
+        const rd = new FileReader();
+        rd.onload = () => { readSettingsForm(); draft.print.logo = String(rd.result); renderPrintForm(); markDirty(); };
+        rd.readAsDataURL(f);
+    });
+    $('#printLogoRemove').addEventListener('click', () => { readSettingsForm(); draft.print.logo = ''; renderPrintForm(); markDirty(); });
+
+    // --- Ungespeicherte Änderungen abfangen ---
+    let settingsSnapshot = '';
+    /** Aktueller Stand der Formulare als Text (zum Vergleich mit dem Stand beim Öffnen). */
+    function snapshotSettings() {
+        readSettingsForm();
+        readAiForm();
+        return JSON.stringify([draft, draftAi]);
+    }
+    const settingsDirty = () => snapshotSettings() !== settingsSnapshot;
+    let dirtyTimer = null;
+    function markDirty() {
+        clearTimeout(dirtyTimer);
+        dirtyTimer = setTimeout(() => {
+            if (!draft) return;
+            const dirty = settingsDirty();
+            $('#setFootHint').innerHTML = dirty ? `<span class="set-dirty">${icon('pencil')} Ungespeicherte Änderungen</span>` : '';
+            $('#setSub').textContent = dirty ? 'Änderungen werden erst mit «Speichern» übernommen – für alle, wenn zentrale Einstellungen aktiv sind.' : 'Änderungen werden erst mit «Speichern» übernommen.';
+        }, 250);
+    }
+    /** Schliessen mit Nachfrage, wenn etwas geändert wurde. */
+    function tryCloseSettings() {
+        if (!draft || !settingsDirty()) { $('#settingsDialog').close('cancel'); return; }
+        const dlg = $('#discardDialog');
+        const changes = [];
+        const before = JSON.parse(settingsSnapshot);
+        if (JSON.stringify(before[0].templates) !== JSON.stringify(draft.templates)) changes.push('Funktionen');
+        if (JSON.stringify(before[0].salaryTables) !== JSON.stringify(draft.salaryTables)) changes.push('Gehaltstabellen');
+        if (JSON.stringify(before[0].categories) !== JSON.stringify(draft.categories)) changes.push('Berufe');
+        if (JSON.stringify(before[0].classAdjustments) !== JSON.stringify(draft.classAdjustments)) changes.push('Korrekturen');
+        if (JSON.stringify(before[0].print) !== JSON.stringify(draft.print)) changes.push('Druck');
+        if (JSON.stringify(before[0].positions) !== JSON.stringify(draft.positions)) changes.push('Stellen');
+        if (before[0].fourEyes !== draft.fourEyes || before[0].retentionDays !== draft.retentionDays || JSON.stringify(before[0].retentionByStatus) !== JSON.stringify(draft.retentionByStatus)) changes.push('Aufbewahrung / Prüfung');
+        if (JSON.stringify(before[1]) !== JSON.stringify(draftAi)) changes.push('Zugang / KI');
+
+        $('#discardText').textContent = `Ungespeicherte Änderungen${changes.length ? ' bei: ' + changes.join(', ') : ''}. Verwerfen, weiter bearbeiten oder speichern?`;
+        dlg.returnValue = '';
+        dlg.showModal();
+        dlg.addEventListener('close', () => {
+            if (dlg.returnValue === 'discard') $('#settingsDialog').close('cancel');
+            else if (dlg.returnValue === 'save') $('#settingsDialog').close('save');
+        }, { once: true });
+    }
+    document.querySelectorAll('[data-setclose]').forEach(b => b.addEventListener('click', tryCloseSettings));
+    $('#settingsDialog').addEventListener('cancel', e => { e.preventDefault(); tryCloseSettings(); });
+    $('#settingsDialog').addEventListener('input', markDirty);
+    $('#settingsDialog').addEventListener('change', markDirty);
+
+    // --- Suche über alle Einstellungen ---
+    /** Alle durchsuchbaren Einträge: Funktionen, Zulagen, Korrekturen, Gehaltstabellen, Berufe, Stellen und die Felder der Bereiche. */
+    function settingsIndex() {
+        readSettingsForm();
+        const out = [];
+        const paneName = { access: 'Zugang', ai: 'KI', templates: 'Funktionen', salary: 'Gehaltstabellen', categories: 'Berufe', data: 'Import & Export', history: 'Verlauf' };
+        for (const t of draft.templates) {
+            const e = P.effectiveTemplate(t, draft.templates);
+            out.push({ kind: 'Funktion', title: t.name, text: [e.classMin ? `LK ${e.classMin}–${e.classMax || e.classMin}` : '', t.group, (t.keywords || []).join(', '), t.note].filter(Boolean).join(' · '), go: () => { tplTab = 'general'; renderTemplatesForm(t.id); }, pane: 'templates', sel: `#tplList [data-tpl]` });
+            for (const a of t.allowances || []) out.push({ kind: 'Zulage', title: a.label, text: `${chf(a.annual)} · ${t.name}`, go: () => { tplTab = 'pay'; renderTemplatesForm(t.id); }, pane: 'templates', sel: `#tplList [data-al="${a.id}"]` });
+        }
+        for (const a of draft.classAdjustments || []) out.push({ kind: 'Korrektur', title: a.label, text: `${a.delta > 0 ? '+' : ''}${a.delta} Klasse(n)${a.auto && a.auto.kind ? ' · automatisch: ' + ((P.AUTO_KINDS.find(k => k.id === a.auto.kind) || {}).name || '') : ''}`, pane: 'templates', sel: `#adjList [data-adj="${a.id}"]` });
+        for (const st of draft.salaryTables) out.push({ kind: 'Gehaltstabelle', title: st.name, text: st.validFrom ? 'gültig ab ' + fmtDay(st.validFrom) : 'ohne Gültigkeitsdatum', go: () => renderSalaryList(st.id), pane: 'salary', sel: `#salaryList [data-st="${st.id}"]` });
+        for (const c of draft.categories) out.push({ kind: 'Beruf', title: c.name, text: c.keywords.join(', '), pane: 'categories', sel: `#catList [data-cat="${c.id}"]` });
+        for (const p of draft.positions || []) out.push({ kind: 'Stelle', title: p.title, text: `${p.status} · ${(draft.templates.find(t => t.id === p.templateId) || {}).name || ''}`, go: () => { $('#settingsDialog').close('cancel'); location.hash = '#stellen'; openPositionDialog(positionOf(p.id)); } });
+        // Felder und Schalter der Bereiche (Beschriftungen aus dem Dialog)
+        document.querySelectorAll('.set-pane').forEach(pane => {
+            if (pane.dataset.pane === 'templates') return;
+            pane.querySelectorAll('.set-card h4, .switch-row b, label.field > span, .feature-text h4').forEach(el => {
+                const card = el.closest('.set-card, .field, .switch-row');
+                if (!card) return;
+                if (!card.id) card.id = 'sx_' + Math.random().toString(36).slice(2, 8);
+                out.push({ kind: paneName[pane.dataset.pane] || 'Einstellung', title: el.textContent.trim(), text: (card.querySelector('small, .hint') || {}).textContent || '', pane: pane.dataset.pane, sel: '#' + card.id });
+            });
+        });
+        return out;
+    }
+    function highlight(text, terms) {
+        let s = esc(text);
+        terms.forEach(t => { s = s.replace(new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<mark>$1</mark>'); });
+        return s;
+    }
+    let searchHits = [];
+    function runSettingsSearch() {
+        const q = $('#setSearch').value.trim().toLowerCase();
+        const box = $('#setSearchResults');
+        if (q.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+        const terms = q.split(/\s+/).filter(Boolean);
+        searchHits = settingsIndex().filter(h => terms.every(t => (h.title + ' ' + h.text).toLowerCase().includes(t)))
+            .sort((a, b) => (b.title.toLowerCase().includes(q) ? 1 : 0) - (a.title.toLowerCase().includes(q) ? 1 : 0)).slice(0, 25);
+        box.hidden = false;
+        box.innerHTML = searchHits.length ? searchHits.map((h, i) => `<button type="button" class="set-hit" data-hit="${i}"><b>${highlight(h.title, terms)}</b><span class="set-hit-kind">${esc(h.kind)}</span>${h.text ? `<small>${highlight(h.text.slice(0, 140), terms)}</small>` : ''}</button>`).join('')
+            : '<p class="empty">Nichts gefunden.</p>';
+    }
+    function gotoHit(h) {
+        $('#setSearchResults').hidden = true;
+        $('#setSearch').value = '';
+        if (h.go) h.go();
+        if (h.pane) showPane(h.pane);
+        if (h.sel) {
+            const el = document.querySelector(h.sel);
+            if (el) {
+                el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                el.classList.add('flash');
+                setTimeout(() => el.classList.remove('flash'), 1600);
+                const inp = el.querySelector('input:not([type="checkbox"]), textarea, select');
+                if (inp && el.closest('.set-pane')?.dataset.pane !== 'templates') inp.focus({ preventScroll: true });
+            }
+        }
+    }
+    $('#setSearch').addEventListener('input', runSettingsSearch);
+    $('#setSearch').addEventListener('focus', runSettingsSearch);
+    $('#setSearch').addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); $('#setSearchResults').hidden = true; $('#setSearch').value = ''; }
+        if (e.key === 'Enter' && searchHits.length) { e.preventDefault(); gotoHit(searchHits[0]); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); $('#setSearchResults .set-hit')?.focus(); }
+    });
+    $('#setSearchResults').addEventListener('click', e => { const b = e.target.closest('[data-hit]'); if (b) gotoHit(searchHits[+b.dataset.hit]); });
+    $('#setSearchResults').addEventListener('keydown', e => {
+        const items = [...$('#setSearchResults').querySelectorAll('.set-hit')];
+        const i = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' && i < items.length - 1) { e.preventDefault(); items[i + 1].focus(); }
+        if (e.key === 'ArrowUp') { e.preventDefault(); if (i > 0) items[i - 1].focus(); else $('#setSearch').focus(); }
+    });
+    document.addEventListener('click', e => { if (!e.target.closest('.set-search')) $('#setSearchResults').hidden = true; });
+
+    // --- Verlauf der zentralen Einstellungen ---
+    async function renderHistory() {
+        const box = $('#historyList');
+        if (!shared.enabled) { box.innerHTML = `<p class="hint">Der Verlauf gibt es nur mit zentralen Einstellungen auf dem Server (Bereich «Zugang»).</p>`; return; }
+        if (!draftAi.password) { box.innerHTML = `<p class="hint warn">Für den Verlauf fehlt das Zugangspasswort (Bereich «Zugang»).</p>`; return; }
+        box.innerHTML = '<p class="hint"><span class="spinner"></span> Verlauf wird geladen …</p>';
+        try {
+            const res = await fetch(SETTINGS_URL + '?action=history', { cache: 'no-store', headers: { 'x-app-password': draftAi.password } });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `Fehler ${res.status}`);
+            const list = data.versions || [];
+            if (!list.length) { box.innerHTML = '<p class="hint">Noch keine Versionen gespeichert.</p>'; return; }
+            box.innerHTML = list.map((v, i) => {
+                const prev = list[i + 1];
+                const diff = prev ? ['templates', 'salaryTables', 'categories', 'positions', 'classAdjustments'].map(k => {
+                    const d = (v.counts[k] || 0) - (prev.counts[k] || 0);
+                    return d ? `${d > 0 ? '+' : ''}${d} ${{ templates: 'Funktionen', salaryTables: 'Tabellen', categories: 'Berufe', positions: 'Stellen', classAdjustments: 'Korrekturen' }[k]}` : '';
+                }).filter(Boolean).join(', ') : `${v.counts.templates || 0} Funktionen, ${v.counts.salaryTables || 0} Tabellen`;
+                return `<div class="history-row${v.version === data.current ? ' current' : ''}">
+                    <span class="v">v${v.version}</span>
+                    <span class="meta"><span>${esc(fmtWhen(v.updatedAt))}${v.version === data.current ? ' · <b>aktuell</b>' : ''}</span><small>${v.updatedBy ? 'von ' + esc(v.updatedBy) : 'ohne Namen gespeichert'}</small></span>
+                    <span class="diff">${esc(diff || 'keine Änderung der Anzahl')}</span>
+                    ${v.version === data.current ? '<span></span>' : `<button class="btn btn-ghost btn-sm" type="button" data-restore="${v.version}">${icon('history')} Wiederherstellen</button>`}
+                </div>`;
+            }).join('');
+        } catch (err) {
+            box.innerHTML = `<p class="hint warn">Verlauf konnte nicht geladen werden: ${esc(err.message)}</p>`;
+        }
+    }
+    $('#historyList').addEventListener('click', async e => {
+        const b = e.target.closest('[data-restore]');
+        if (!b) return;
+        b.disabled = true;
+        try {
+            const res = await fetch(SETTINGS_URL + '?action=version&v=' + encodeURIComponent(b.dataset.restore), { cache: 'no-store', headers: { 'x-app-password': draftAi.password } });
+            const data = await res.json();
+            if (!res.ok || !data.settings) throw new Error(data.error || `Fehler ${res.status}`);
+            const n = P.normalizeSettings(data.settings);
+            if (!n.templates.length) throw new Error('Die Version enthält keine Funktionen.');
+            readSettingsForm();
+            const before = clone(draft);
+            draft = n;
+            renderSettingsForm();
+            markDirty();
+            showPane('templates');
+            undoable(`Version ${data.version} geladen – wird erst mit «Speichern» für alle übernommen.`, () => { draft = before; renderSettingsForm(); markDirty(); });
+        } catch (err) {
+            toast('Version konnte nicht geladen werden: ' + err.message, 'error');
+            b.disabled = false;
+        }
+    });
 
     // --- Navigation im Einstellungsdialog ---
     let settingsPane = 'access';
@@ -1689,6 +2222,7 @@
         document.querySelectorAll('.set-nav-item').forEach(b => { b.classList.toggle('active', b.dataset.pane === id); b.setAttribute('aria-current', b.dataset.pane === id ? 'page' : 'false'); });
         document.querySelectorAll('.set-pane').forEach(p => { p.hidden = p.dataset.pane !== id; });
         $('.set-content').scrollTop = 0;
+        if (id === 'history' && draft) renderHistory();
     }
     /** Anzahl bzw. Status neben jedem Bereich. */
     function updateSettingsNav() {
@@ -1700,7 +2234,8 @@
             templates: draft.templates.length,
             salary: draft.salaryTables.length || '<span class="off">–</span>',
             categories: draft.categories.length,
-            data: ''
+            data: '',
+            history: shared.enabled && shared.version ? `v${shared.version}` : ''
         };
         document.querySelectorAll('[data-count]').forEach(el => { el.innerHTML = counts[el.dataset.count] ?? ''; });
         const n = draft.templates.length;
@@ -1741,6 +2276,7 @@
         draft.fourEyes = $('#fourEyes').checked;
         const days = $('#retentionDays').value.trim();
         draft.retentionDays = days === '' ? null : Math.max(0, Math.round(+days) || 0);
+        draft.print = Object.assign(draft.print || { logo: '' }, { org: $('#printOrg').value.trim(), footer: $('#printFooter').value.trim() });
         document.querySelectorAll('#catList .cat-item').forEach(item => {
             const cat = draft.categories.find(c => c.id === item.dataset.cat);
             cat.name = item.querySelector('[data-k="name"]').value.trim() || 'Unbenannt';
@@ -1849,7 +2385,8 @@
             base = shared.version;
         }
         for (let attempt = 0; attempt < 2; attempt++) {
-            const { status, data } = await sharedRequest('POST', { baseVersion: base, settings }, ai.password, ai.adminPassword);
+            const { status, data } = await sharedRequest('POST', { baseVersion: base, settings, updatedBy: ai.userName || '' }, ai.password, ai.adminPassword);
+
             if (status === 200) {
                 rememberShared(data.version, data.updatedAt);
                 setStatus(`Einstellungen zentral gespeichert (Version ${data.version}).`);
@@ -1874,8 +2411,12 @@
         renderAiForm();
         renderSettingsForm(tplId);
         $('#tplSearch').value = '';
+        $('#setSearch').value = '';
+        $('#setSearchResults').hidden = true;
         $('#importResult').innerHTML = '';
-        showPane(tplId ? 'templates' : settingsPane);
+        $('#setFootHint').innerHTML = '';
+        settingsSnapshot = snapshotSettings();
+        showPane(tplId ? 'templates' : settingsPane === 'history' ? 'access' : settingsPane);
         $('#settingsDialog').showModal();
         if (tplId) document.querySelector(`#tplList [data-tpl="${CSS.escape(tplId)}"]`)?.scrollIntoView({ block: 'start' });
         await checkStore();
@@ -1911,8 +2452,12 @@
         const d = e.target.closest('[data-deladj]');
         if (!d) return;
         readSettingsForm();
-        draft.classAdjustments = draft.classAdjustments.filter(a => a.id !== d.dataset.deladj);
+        const a = draft.classAdjustments.find(x => x.id === d.dataset.deladj);
+        const i = draft.classAdjustments.indexOf(a);
+        draft.classAdjustments = draft.classAdjustments.filter(x => x !== a);
         renderAdjList();
+        markDirty();
+        undoable(`Korrektur «${a.label}» gelöscht.`, () => { draft.classAdjustments.splice(Math.min(i, draft.classAdjustments.length), 0, a); renderAdjList(); markDirty(); });
     });
     $('#adjList').addEventListener('change', e => {
         if (e.target.dataset.af === 'kind') { readSettingsForm(); renderAdjList(); }
@@ -1949,13 +2494,20 @@
         if (!del && !cp) return;
         readSettingsForm();
         if (del) {
-            if (draft.templates.length === 1) { alert('Es muss mindestens eine Vorlage vorhanden sein.'); return; }
+            if (draft.templates.length === 1) { toast('Es muss mindestens eine Funktion vorhanden sein.', 'warn'); return; }
             const t = draft.templates.find(x => x.id === del.dataset.deltpl);
-            if (!confirm(`Funktion «${t.name}» löschen?`)) return;
             const i = draft.templates.indexOf(t);
+            const usedBy = draft.templates.filter(x => x.baseTemplateId === t.id);
+            const posUsed = (draft.positions || []).filter(p => p.templateId === t.id);
             draft.templates.splice(i, 1);
             tplSel = (draft.templates[i] || draft.templates[i - 1]).id;
             renderTemplatesForm();
+            markDirty();
+            undoable(`Funktion «${t.name}» gelöscht${usedBy.length ? ` – Grundfunktion von ${usedBy.map(x => x.name).join(', ')}` : ''}${posUsed.length ? ` – ${posUsed.length} Stelle(n) ohne Funktion` : ''}.`, () => {
+                draft.templates.splice(Math.min(i, draft.templates.length), 0, t);
+                renderTemplatesForm(t.id);
+                markDirty();
+            });
         } else {
             const src = draft.templates.find(t => t.id === cp.dataset.copytpl);
             const t = Object.assign(clone(src), { id: P.makeTemplate(src.target).id, name: src.name + ' (Kopie)' });
@@ -2126,11 +2678,19 @@
         readSettingsForm();
         const st = draft.salaryTables.find(x => x.id === del.dataset.delst);
         const used = draft.templates.filter(t => t.salaryTableId === st.id);
-        if (!confirm(`Gehaltstabelle «${st.name}» löschen?` + (used.length ? `\n\nDiese Vorlagen verwenden sie fest und nehmen danach automatisch die am Stichtag gültige: ${used.map(t => t.name).join(', ')}` : ''))) return;
+        const i = draft.salaryTables.indexOf(st);
         draft.salaryTables = draft.salaryTables.filter(x => x !== st);
         used.forEach(t => { t.salaryTableId = ''; });
         renderSalaryList();
         renderTemplatesForm();
+        markDirty();
+        undoable(`Gehaltstabelle «${st.name}» gelöscht${used.length ? ` – ${used.length} Funktion(en) nehmen nun die am Stichtag gültige Tabelle` : ''}.`, () => {
+            draft.salaryTables.splice(Math.min(i, draft.salaryTables.length), 0, st);
+            used.forEach(t => { t.salaryTableId = st.id; });
+            renderSalaryList(st.id);
+            renderTemplatesForm();
+            markDirty();
+        });
     });
     $('#salaryList').addEventListener('change', e => {
         const item = e.target.closest('[data-st]');
@@ -2171,21 +2731,27 @@
         if (!b) return;
         readSettingsForm();
         const id = b.dataset.delcat;
-        if (draft.categories.length === 1) { alert('Es muss mindestens ein Beruf vorhanden sein.'); return; }
+        if (draft.categories.length === 1) { toast('Es muss mindestens ein Beruf vorhanden sein.', 'warn'); return; }
+        const cat = draft.categories.find(c => c.id === id);
         const affected = draft.templates.filter(t => t.target === id);
-        if (affected.length && !confirm(`Vorlagen mit diesem Zielberuf werden ebenfalls gelöscht: ${affected.map(t => t.name).join(', ')}. Fortfahren?`)) return;
+        const before = clone({ categories: draft.categories, templates: draft.templates });
         draft.categories = draft.categories.filter(c => c.id !== id);
         draft.templates = draft.templates.filter(t => t.target !== id);
         draft.templates.forEach(t => { t.related = t.related.filter(r => r !== id); });
         if (!draft.templates.length) draft.templates.push(P.makeTemplate(draft.categories[0].id, draft.categories[0].name));
         renderSettingsForm();
+        markDirty();
+        undoable(`Beruf «${cat.name}» gelöscht${affected.length ? ` – samt ${affected.length} Funktion(en) mit diesem Zielberuf` : ''}.`, () => { Object.assign(draft, before); renderSettingsForm(); markDirty(); });
     });
     $('#resetSettings').addEventListener('click', () => {
-        if (!confirm('Berufe und Vorlagen auf den Standard zurücksetzen?')) return;
         readSettingsForm();
-        draft = Object.assign(clone(P.DEFAULT_SETTINGS), { salaryTables: draft.salaryTables });
+        const before = clone(draft);
+        draft = Object.assign(clone(P.DEFAULT_SETTINGS), { salaryTables: draft.salaryTables, print: draft.print, positions: draft.positions, retentionDays: draft.retentionDays, retentionByStatus: draft.retentionByStatus, fourEyes: draft.fourEyes });
         renderSettingsForm();
+        markDirty();
+        undoable('Berufe und Funktionen auf den Standard zurückgesetzt – gilt erst mit «Speichern».', () => { draft = before; renderSettingsForm(); markDirty(); });
     });
+
     $('#exportSettings').addEventListener('click', () => {
         readSettingsForm();
         download('lebenslauf-rechner-einstellungen.json', JSON.stringify(draft, null, 2), 'application/json');
@@ -2285,12 +2851,36 @@ Deutsch, Englisch`;
     $('#applicantsBody').addEventListener('click', e => {
         const rm = e.target.closest('[data-remove]');
         if (rm) { removeCandidate(rm.dataset.remove); return; }
+        if (e.target.closest('select')) return;
+        const ps = e.target.closest('[data-rowsalary]');
+        if (ps) { const c = candidates.find(x => x.id === ps.dataset.rowsalary); if (c) previewPrint('Lohnblatt', CVReport.salaryPage(buildView(c))); return; }
+        const cp = e.target.closest('[data-rowcompare]');
+        if (cp) { applicantPos = cp.dataset.rowcompare; applicantStatus = 'alle'; renderApplicants(); $('#compareCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
         const row = e.target.closest('[data-select]');
         if (!row) return;
         selectedId = row.dataset.select;
         render();
         $('#applicantDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+    $('#applicantsBody').addEventListener('change', e => {
+        const s = e.target.closest('[data-rowstatus]');
+        if (!s) return;
+        const c = candidates.find(x => x.id === s.dataset.rowstatus);
+        if (!c) return;
+        const before = c.status || 'neu';
+        c.status = s.value;
+        render();
+        undoable(`${c.name}: Status «${statusName(c.status)}».`, () => { c.status = before; render(); });
+    });
+    // Tastatur: Enter/Leertaste auf einer Zeile öffnet die Person
+    $('#applicantsBody').addEventListener('keydown', e => {
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.tagName !== 'TR') return;
+        e.preventDefault();
+        selectedId = e.target.dataset.select;
+        render();
+        $('#applicantDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
     window.addEventListener('hashchange', showView);
     showView();
     // Beim Laden prüfen, ob ein eingerichteter Server vorhanden ist (sobald das KI-Modul geladen ist)

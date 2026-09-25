@@ -1,6 +1,7 @@
 /* ============================================
    Lebenslauf-Rechner — Zeitstrahl (SVG)
-   Eine Zeile pro Stelle, Balkenfarbe nach Anrechnungsfaktor, Lücken schraffiert.
+   Eine Zeile pro Stelle, Balkenfarbe nach Beruf (Kategorie), teilweise angerechnete Zeiten
+   halbtransparent, nicht angerechnete grau schraffiert, Lücken im Lebenslauf schraffiert.
    Stellt window.CVTimeline bereit.
    ============================================ */
 (function (root) {
@@ -18,12 +19,15 @@
         return 1;
     }
 
-    const LEGEND = [
-        { tier: 3, label: 'voll angerechnet (100 %)' },
-        { tier: 2, label: 'teilweise (75–99 %)' },
-        { tier: 1, label: 'teilweise (unter 75 %)' },
-        { tier: 0, label: 'nicht angerechnet' }
-    ];
+    const N_COLORS = 12; // Farben .tl-cat-0 … .tl-cat-11 in app.css
+    /** Farbklasse je Beruf: feste Reihenfolge nach erstem Auftreten, damit gleiche Berufe gleich gefärbt sind. */
+    function colorMap(rows) {
+        const map = new Map();
+        rows.forEach(r => { if (!map.has(r.e.category)) map.set(r.e.category, map.size % N_COLORS); });
+        return map;
+    }
+    /** Klassen eines Balkens: Farbe nach Beruf, halbtransparent bei Teil-Anrechnung, schraffiert wenn nicht angerechnet. */
+    const barClass = (r, colors) => r.t === 0 ? 'tl-bar tl-off-bar' : `tl-bar tl-cat-${colors.get(r.e.category)}${r.t < 3 ? ' tl-part' : ''}`;
 
     /**
      * @param {object} o
@@ -70,8 +74,10 @@
         const H = top + rows.length * rowH + axisH;
         const X = m => labelW + ((m - x0) / (x1 - x0)) * plotW;
 
+        const colors = colorMap(rows);
         let svg = `<svg class="timeline" viewBox="0 0 ${W} ${H}" role="img" aria-label="Zeitstrahl der Stellen">`;
-        svg += `<defs><pattern id="tl-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="tl-gap-bg"/><line x1="0" y1="0" x2="0" y2="6" class="tl-gap-line"/></pattern></defs>`;
+        svg += `<defs><pattern id="tl-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="tl-gap-bg"/><line x1="0" y1="0" x2="0" y2="6" class="tl-gap-line"/></pattern>`
+            + `<pattern id="tl-offhatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect width="5" height="5" class="tl-off-bg"/><line x1="0" y1="0" x2="0" y2="5" class="tl-off-line"/></pattern></defs>`;
 
         // Jahres-Raster
         const years = Math.ceil(x1 / 12) - startYear;
@@ -103,16 +109,25 @@
             const tip = `${r.e.title} · ${o.catName(r.e.category)} · ${ym(r.s)} – ${r.e.ongoing ? 'heute' : ym(r.en)} · ` +
                 (r.e.include ? `Faktor ${r.factor} % · angerechnet ${(Math.round(r.credited / 12 * 10) / 10).toFixed(1)} J.` : 'nicht angerechnet');
             svg += `<text x="${labelW - 10}" y="${y + rowH / 2 + 4}" class="tl-label${r.t === 0 ? ' tl-off' : ''}" text-anchor="end">${esc(title)}</text>`;
-            svg += `<rect x="${X(r.s)}" y="${y + (rowH - barH) / 2}" width="${w}" height="${barH}" rx="3" class="tl-bar tl-f${r.t}" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}"/>`;
+            svg += `<rect x="${X(r.s)}" y="${y + (rowH - barH) / 2}" width="${w}" height="${barH}" rx="3" class="${barClass(r, colors)}" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}"/>`;
         });
         svg += `<line x1="${labelW}" x2="${W - padR}" y1="${H - axisH}" y2="${H - axisH}" class="tl-baseline"/>`;
         svg += '</svg>';
 
-        const used = new Set(rows.map(r => r.t));
-        const legend = LEGEND.filter(l => used.has(l.tier))
-            .map(l => `<span class="tl-key"><svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" class="tl-bar tl-f${l.tier}"/></svg>${l.label}</span>`);
-        if (gaps.length) legend.push(`<span class="tl-key"><svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" class="tl-gap-bg"/><path d="M0 10 L10 0 M4 10 L14 0 M-4 6 L2 0" class="tl-gap-line"/></svg>Lücke (ab 3 Monaten)</span>`);
+        // Legende: ein Eintrag pro Beruf (nur angerechnete), dazu «teilweise», «nicht angerechnet» und Lücken
+        const key = (cls, label, extra) => `<span class="tl-key"><svg width="14" height="10" aria-hidden="true">${extra || ''}<rect width="14" height="10" rx="2" class="${cls}"/></svg>${esc(label)}</span>`;
+        const legend = [];
+        const seen = new Set();
+        rows.filter(r => r.t > 0).forEach(r => {
+            if (seen.has(r.e.category)) return;
+            seen.add(r.e.category);
+            legend.push(key(`tl-bar tl-cat-${colors.get(r.e.category)}`, o.catName(r.e.category)));
+        });
+        if (rows.some(r => r.t > 0 && r.t < 3)) legend.push(key('tl-bar tl-cat-0 tl-part', 'heller = teilweise angerechnet'));
+        if (rows.some(r => r.t === 0)) legend.push(`<span class="tl-key"><svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" class="tl-off-bg"/><path d="M0 0 L10 10 M4 0 L14 10 M-4 4 L2 10" class="tl-off-line"/><rect width="14" height="10" rx="2" fill="none" class="tl-off-bar" style="fill:none"/></svg>nicht angerechnet</span>`);
+        if (gaps.length) legend.push(`<span class="tl-key"><svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" class="tl-gap-bg"/><path d="M0 10 L10 0 M4 10 L14 0 M-4 6 L2 0" class="tl-gap-line"/></svg>Lücke im Lebenslauf (ab 3 Monaten)</span>`);
         return `<div class="timeline-wrap">${svg}</div><div class="tl-legend">${legend.join('')}</div>`;
+
     }
 
     root.CVTimeline = { render };

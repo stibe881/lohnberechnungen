@@ -10,6 +10,27 @@
     const fmt = y => (Math.round(y * 10) / 10).toLocaleString('de-CH', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     const fmtDate = s => { const m = /^(\d{4})-(\d{2})$/.exec(s || ''); return m ? m[2] + '.' + m[1] : '–'; };
 
+    /** Kopf mit Logo und Organisation (aus den Druckeinstellungen), leer wenn nichts hinterlegt. */
+    function orgHtml(v) {
+        const p = v.print || {};
+        if (!p.logo && !p.org) return '';
+        return `<div class="r-org">${p.logo ? `<img class="r-logo" src="${esc(p.logo)}" alt="">` : ''}${p.org ? `<span class="r-orgname">${esc(p.org)}</span>` : ''}</div>`;
+    }
+    /** Fusszeile: Text aus den Druckeinstellungen und Erstelldatum. */
+    function footHtml(v, kind) {
+        const p = v.print || {};
+        return `<footer class="r-foot"><span>${esc(p.footer || '')}</span><span>${esc(kind)} · ${esc(v.name)} · erstellt am ${esc(v.created)}</span></footer>`;
+    }
+    function headHtml(v, kicker) {
+        return `<header class="r-head">
+                <div>
+                    <div class="r-kicker">${esc(kicker)}</div>
+                    <h1>${esc(v.name)}</h1>
+                </div>
+                <div class="r-meta">${orgHtml(v)}Erstellt am ${esc(v.created)}</div>
+            </header>`;
+    }
+
     /**
      * Eine Berichtsseite.
      * @param {object} v  vorbereitete Daten aus app.js (buildView)
@@ -31,13 +52,7 @@
         const hasOverride = v.entries.some(e => e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '');
         const r = v.result;
         return `<section class="r-page">
-            <header class="r-head">
-                <div>
-                    <div class="r-kicker">Anrechnung der Berufserfahrung</div>
-                    <h1>${esc(v.name)}</h1>
-                </div>
-                <div class="r-meta">Erstellt am ${esc(v.created)}</div>
-            </header>
+            ${headHtml(v, 'Anrechnung der Berufserfahrung')}
             <table class="r-facts">
                 <tr><th>Stelle / Vorlage</th><td>${esc(v.template.name)} (Zielberuf: ${esc(v.catName(v.template.target))}${v.baseText ? '; ' + esc(v.baseText) : ''})${v.suggestionText ? `<div class="r-sub">${esc(v.suggestionText)}</div>` : ''}</td></tr>
                 <tr><th>Geburtsdatum</th><td>${v.birth ? fmtDate(v.birth) : 'nicht angegeben'}</td></tr>
@@ -65,6 +80,7 @@
             ${hasOverride ? `<p class="r-note">* Anrechnung manuell angepasst (${v.overrides} Eintr${v.overrides > 1 ? 'äge' : 'ag'}), abweichend von den Regeln der Vorlage.</p>` : ''}
             ${v.hinweise ? `<p class="r-note"><b>Hinweis:</b> ${esc(v.hinweise)}</p>` : ''}
             ${signHtml(v)}
+            ${footHtml(v, 'Bericht Berufserfahrung')}
         </section>`;
     }
 
@@ -91,20 +107,15 @@
         ];
         const amounts = sal ? [
             ['Jahreslohn bei 100 %', v.chf(sal.full)],
-            [`Jahreslohn bei ${v.pensumText}`, v.chf(sal.base)],
+            ...(sal.pensum !== 100 ? [[`Jahreslohn bei ${v.pensumText}`, v.chf(sal.base)]] : []),
+
             ...sal.allowances.map(a => [`${a.label} (${v.chf(a.annual)} bei 100 %)`, v.chf(a.amount)]),
             ...(sal.allowances.length ? [['Total pro Jahr', v.chf(sal.total)]] : []),
             [`Monatslohn (${sal.payments} Auszahlungen)`, v.chf(sal.monthly)],
             [`Monatslohn bei ${sal.payments === 12 ? 13 : 12} Auszahlungen`, v.chf(sal.monthlyOther)]
         ] : [];
         return `<section class="r-page">
-            <header class="r-head">
-                <div>
-                    <div class="r-kicker">Lohnblatt</div>
-                    <h1>${esc(v.name)}</h1>
-                </div>
-                <div class="r-meta">Erstellt am ${esc(v.created)}</div>
-            </header>
+            ${headHtml(v, 'Lohnblatt')}
             <table class="r-facts">${facts.map(([k, x]) => `<tr><th>${esc(k)}</th><td>${esc(x)}</td></tr>`).join('')}</table>
             <h2 class="r-h2">Einreihung</h2>
             <table class="r-facts">
@@ -122,6 +133,7 @@
                 <tbody>${v.outlook.map(x => `<tr><td>${x.year}</td><td class="num">${x.years}</td><td class="num">${x.cls}</td><td class="num">${x.stage}</td><td class="num">${x.amount ? esc(v.chf(x.amount)) : '–'}</td><td class="num">${x.monthly ? esc(v.chf(x.monthly)) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
             <p class="r-note">${esc(v.settingsText)}. Die Einreihung ist ein Vorschlag nach dem Besoldungsreglement und muss von der zuständigen Stelle bestätigt werden.</p>
             ${signHtml(v)}
+            ${footHtml(v, 'Lohnblatt')}
         </section>`;
     }
 
@@ -143,5 +155,6 @@
     /** Druckt einen Bericht pro Person (views = Array von buildView-Ergebnissen). */
     function print(views) { printPages(views.map(page).join('')); }
 
-    root.CVReport = { print, page, printSalarySheet, salaryPage };
+    root.CVReport = { print, page, printSalarySheet, salaryPage, printPages };
+
 })(typeof self !== 'undefined' ? self : this);

@@ -6,7 +6,9 @@
    Aufrufe:
      GET  settings.php?action=status  -> {"enabled", "exists", "version", "updatedAt", "adminRequired", "problem"}
      GET  settings.php                -> {"version", "updatedAt", "settings"}           (Passwort nötig)
-     POST settings.php                -> Body {"baseVersion", "settings"} speichern       (Passwort nötig)
+     GET  settings.php?action=history -> {"current", "versions": [{version, updatedAt, updatedBy, counts}]} (Passwort nötig)
+     GET  settings.php?action=version&v=N -> die Version N wie GET settings.php        (Passwort nötig)
+     POST settings.php                -> Body {"baseVersion", "settings", "updatedBy"} speichern (Passwort nötig)
    Die Daten liegen in api/data/ (per .htaccess gesperrt, nicht im Git). Frühere Versionen
    werden in api/data/history/ aufbewahrt.
    ============================================ */
@@ -75,6 +77,41 @@ if ($action === 'status' && $method === 'GET') {
 if (!$enabled) fail(503, 'Zentrale Einstellungen sind nicht eingerichtet (Zugangspasswort in config.php fehlt).');
 if (!checkPassword($password, 'HTTP_X_APP_PASSWORD')) fail(401, 'Falsches Zugangspasswort.');
 
+/** Anzahl Funktionen, Tabellen usw. einer Version (für den Verlauf). */
+function countsOf($settings) {
+    $out = [];
+    foreach (['templates', 'salaryTables', 'categories', 'positions', 'classAdjustments'] as $k) {
+        $out[$k] = isset($settings[$k]) && is_array($settings[$k]) ? count($settings[$k]) : 0;
+    }
+    return $out;
+}
+
+if ($action === 'history' && $method === 'GET') {
+    $current = readStore($file);
+    $versions = [];
+    foreach (array_reverse(glob($dataDir . '/history/settings-v*.json') ?: []) as $f) {
+        $v = readStore($f);
+        if ($v === null) continue;
+        $versions[] = ['version' => (int) ($v['version'] ?? 0), 'updatedAt' => $v['updatedAt'] ?? null, 'updatedBy' => $v['updatedBy'] ?? '', 'counts' => countsOf($v['settings'] ?? [])];
+    }
+    // Die aktuelle Version steht immer zuoberst, auch wenn der Verlauf ausgeschaltet ist
+    if ($current !== null && (empty($versions) || $versions[0]['version'] !== (int) $current['version'])) {
+        array_unshift($versions, ['version' => (int) $current['version'], 'updatedAt' => $current['updatedAt'] ?? null, 'updatedBy' => $current['updatedBy'] ?? '', 'counts' => countsOf($current['settings'] ?? [])]);
+    }
+    echo json_encode(['current' => $current ? (int) $current['version'] : 0, 'versions' => $versions]);
+    exit;
+}
+
+if ($action === 'version' && $method === 'GET') {
+    $v = (int) ($_GET['v'] ?? 0);
+    if ($v <= 0) fail(400, 'Ungültige Version.');
+    $store = readStore(sprintf('%s/history/settings-v%05d.json', $dataDir, $v));
+    if ($store === null) { $cur = readStore($file); if ($cur && (int) $cur['version'] === $v) $store = $cur; }
+    if ($store === null) fail(404, 'Diese Version ist nicht mehr vorhanden.');
+    echo json_encode($store);
+    exit;
+}
+
 if ($method === 'GET') {
     $store = readStore($file);
     if ($store === null) fail(404, 'Auf dem Server sind noch keine Einstellungen gespeichert.');
@@ -109,7 +146,8 @@ if ((int) ($data['baseVersion'] ?? -1) !== $currentVersion) {
     fail(409, 'Die Einstellungen wurden inzwischen von jemand anderem geändert.', ['version' => $currentVersion, 'updatedAt' => $current['updatedAt'] ?? null]);
 }
 
-$store = ['version' => $currentVersion + 1, 'updatedAt' => date('c'), 'settings' => $settings];
+$updatedBy = mb_substr(trim((string) ($data['updatedBy'] ?? '')), 0, 80);
+$store = ['version' => $currentVersion + 1, 'updatedAt' => date('c'), 'updatedBy' => $updatedBy, 'settings' => $settings];
 $json = json_encode($store, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
 $tmp = $file . '.tmp';
 if ($json === false || file_put_contents($tmp, $json) === false || !rename($tmp, $file)) {
@@ -125,4 +163,5 @@ if ($keepHistory > 0) {
 }
 flock($lock, LOCK_UN);
 
-echo json_encode(['version' => $store['version'], 'updatedAt' => $store['updatedAt']]);
+echo json_encode(['version' => $store['version'], 'updatedAt' => $store['updatedAt'], 'updatedBy' => $updatedBy]);
+

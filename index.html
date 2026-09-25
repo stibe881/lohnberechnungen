@@ -41,11 +41,17 @@
                 <strong>Lebensläufe hierher ziehen oder klicken</strong>
                 <span>PDF, Word (.docx) oder Text – mehrere gleichzeitig möglich</span>
             </div>
+            <ol class="onboarding" id="onboarding" hidden>
+                <li><span class="ob-nr">1</span><div><b>Lebenslauf ablegen</b><small>PDF, Word oder Text – auch mehrere auf einmal.</small></div></li>
+                <li><span class="ob-nr">2</span><div><b>Stelle wählen</b><small>Oben eine offene Stelle oder Funktion wählen, oder die App schlägt sie aus dem Lebenslauf vor.</small></div></li>
+                <li><span class="ob-nr">3</span><div><b>Auswertung prüfen</b><small>Erfahrung, Lohnklasse und Lohn kontrollieren, dann Lohnblatt drucken.</small></div></li>
+            </ol>
             <div class="upload-actions">
                 <button class="btn btn-ghost" id="pasteBtn" type="button">Text einfügen</button>
                 <button class="btn btn-ghost" id="exampleBtn" type="button">Beispiel laden</button>
             </div>
-            <div id="status" class="status" role="status"></div>
+            <div id="progress" class="progress" role="progressbar" aria-valuemin="0" aria-valuenow="0" aria-valuemax="1" hidden><div class="progress-track"><div class="progress-bar"></div></div><span class="progress-text"></span></div>
+            <div id="status" class="status" role="status" aria-live="polite"></div>
         </section>
 
         <section id="overview" class="card" hidden>
@@ -140,14 +146,15 @@
                 <table class="table overview-table applicants-table">
                     <thead>
                         <tr>
-                            <th>Status</th>
-                            <th>Person</th>
-                            <th>Funktion / Stelle</th>
-                            <th class="num">Anrechenbar</th>
-                            <th class="num">Einreihung</th>
-                            <th>Ausgewertet</th>
+                            <th><button type="button" class="sort-btn" data-sort="status">Status</button></th>
+                            <th><button type="button" class="sort-btn" data-sort="name">Person</button></th>
+                            <th><button type="button" class="sort-btn" data-sort="function">Funktion / Stelle</button></th>
+                            <th class="num"><button type="button" class="sort-btn" data-sort="years">Anrechenbar</button></th>
+                            <th class="num"><button type="button" class="sort-btn" data-sort="placement">Einreihung</button></th>
+                            <th class="num"><button type="button" class="sort-btn" data-sort="salary">Jahreslohn</button></th>
+                            <th><button type="button" class="sort-btn" data-sort="created">Ausgewertet</button></th>
                             <th>Aufbewahrung</th>
-                            <th></th>
+                            <th class="actions-col"><span class="sr-only">Aktionen</span></th>
                         </tr>
                     </thead>
                     <tbody id="applicantsBody"></tbody>
@@ -164,9 +171,43 @@
                 <h2>Lebenslauf</h2>
                 <div class="row-gap" id="cvActions"></div>
             </div>
-            <div id="cvViewer"></div>
+            <details class="cv-details" id="cvDetails">
+                <summary id="cvSummary">Lebenslauf anzeigen</summary>
+                <div id="cvViewer"></div>
+            </details>
         </section>
     </main>
+
+    <!-- Druckvorschau (Bericht, Lohnblatt) -->
+    <dialog id="printDialog" class="dialog print-dialog">
+        <div class="print-shell">
+            <header class="set-head">
+                <div><h2 id="printTitle">Druckvorschau</h2><p class="set-sub">Logo und Fusszeile stellst du unter Einstellungen → Import & Export → Druck ein.</p></div>
+                <button class="btn-icon set-close" type="button" id="printClose" title="Schliessen" aria-label="Schliessen"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+            </header>
+            <div class="print-preview" id="printPreview"></div>
+            <footer class="set-foot">
+                <span class="hint" id="printHint"></span>
+                <div class="row-gap">
+                    <button class="btn btn-ghost" type="button" id="printCancel">Abbrechen</button>
+                    <button class="btn btn-primary" type="button" id="printGo"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3h12v6"/><rect width="12" height="8" x="6" y="14"/></svg> Drucken / als PDF speichern</button>
+                </div>
+            </footer>
+        </div>
+    </dialog>
+
+    <!-- Ungespeicherte Änderungen in den Einstellungen -->
+    <dialog id="discardDialog" class="dialog dialog-small">
+        <form method="dialog" class="dialog-inner">
+            <h2>Änderungen verwerfen?</h2>
+            <p class="hint" id="discardText">In den Einstellungen gibt es ungespeicherte Änderungen.</p>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" value="keep" autofocus>Weiter bearbeiten</button>
+                <button class="btn btn-ghost btn-danger" value="discard">Änderungen verwerfen</button>
+                <button class="btn btn-primary" value="save">Speichern</button>
+            </div>
+        </form>
+    </dialog>
 
     <!-- Text einfügen -->
     <dialog id="pasteDialog" class="dialog">
@@ -189,7 +230,11 @@
                     <h2>Einstellungen</h2>
                     <p class="set-sub" id="setSub">Änderungen werden erst mit «Speichern» übernommen.</p>
                 </div>
-                <button class="btn-icon set-close" value="cancel" formnovalidate title="Schliessen" aria-label="Schliessen"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+                <div class="set-search">
+                    <label class="search-field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="search" id="setSearch" placeholder="Alle Einstellungen durchsuchen …" aria-label="Alle Einstellungen durchsuchen" autocomplete="off"></label>
+                    <div class="set-search-results" id="setSearchResults" hidden></div>
+                </div>
+                <button class="btn-icon set-close" type="button" data-setclose title="Schliessen" aria-label="Schliessen"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
             </header>
             <div class="set-body">
                 <nav class="set-nav" aria-label="Bereiche der Einstellungen">
@@ -198,7 +243,8 @@
                     <button type="button" class="set-nav-item" data-pane="templates"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg><span class="set-nav-text"><b>Funktionen</b><small>Vorlagen & Regeln</small></span><span class="set-nav-badge" data-count="templates"></span></button>
                     <button type="button" class="set-nav-item" data-pane="salary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></svg><span class="set-nav-text"><b>Gehaltstabellen</b><small>Löhne je Klasse</small></span><span class="set-nav-badge" data-count="salary"></span></button>
                     <button type="button" class="set-nav-item" data-pane="categories"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg><span class="set-nav-text"><b>Berufe</b><small>Stichwörter</small></span><span class="set-nav-badge" data-count="categories"></span></button>
-                    <button type="button" class="set-nav-item" data-pane="data"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="set-nav-text"><b>Import & Export</b><small>Reglement, Sicherung</small></span><span class="set-nav-badge" data-count="data"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="data"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="set-nav-text"><b>Import & Export</b><small>Reglement, Sicherung, Druck</small></span><span class="set-nav-badge" data-count="data"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="history"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span class="set-nav-text"><b>Verlauf</b><small>Frühere Versionen</small></span><span class="set-nav-badge" data-count="history"></span></button>
                 </nav>
                 <div class="set-content">
 
@@ -321,10 +367,33 @@
                                 <button class="btn btn-ghost" type="button" id="exportSettings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg> Exportieren</button>
                             </div>
                         </div>
+                        <div class="set-card" id="printCard">
+                            <h4>Druck: Bericht und Lohnblatt</h4>
+                            <p class="hint">Erscheint im Kopf und in der Fusszeile jeder gedruckten Seite. Vor dem Drucken zeigt die App eine Vorschau.</p>
+                            <div class="grid-2">
+                                <label class="field"><span>Organisation / Absender</span><input type="text" id="printOrg" placeholder="z. B. Stiftung Muster, Personaldienst" maxlength="120"></label>
+                                <div class="field"><span>Logo (PNG, JPG oder SVG, max. 300 KB)</span>
+                                    <div class="logo-row">
+                                        <img id="printLogoPreview" class="logo-preview" alt="" hidden>
+                                        <label class="btn btn-ghost btn-sm"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg> Logo wählen<input type="file" id="printLogo" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
+                                        <button class="btn btn-ghost btn-sm" type="button" id="printLogoRemove" hidden>Entfernen</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <label class="field"><span>Fusszeile</span><textarea id="printFooter" rows="2" maxlength="400" placeholder="z. B. Vertraulich – nur für den internen Gebrauch. Stiftung Muster, Musterstrasse 1, 6300 Zug"></textarea></label>
+                        </div>
                         <div class="set-card danger-card">
                             <h4>Zurücksetzen</h4>
                             <p class="hint">Setzt Funktionen und Berufe auf den Standard der App zurück. Gehaltstabellen bleiben erhalten.</p>
                             <div><button class="btn btn-ghost btn-danger" type="button" id="resetSettings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Standard wiederherstellen</button></div>
+                        </div>
+                    </section>
+
+                    <!-- Verlauf der zentralen Einstellungen -->
+                    <section class="set-pane" data-pane="history" hidden>
+                        <div class="pane-head"><h3>Verlauf</h3><p>Jede zentral gespeicherte Version bleibt auf dem Server. Eine frühere Version lässt sich hier ansehen und wiederherstellen – sie wird erst mit «Speichern» für alle übernommen.</p></div>
+                        <div class="set-card">
+                            <div id="historyList" class="history-list"><p class="hint">Verlauf wird geladen …</p></div>
                         </div>
                     </section>
                 </div>
@@ -332,10 +401,11 @@
             <footer class="set-foot">
                 <span class="hint" id="setFootHint"></span>
                 <div class="row-gap">
-                    <button class="btn btn-ghost" value="cancel" formnovalidate>Abbrechen</button>
+                    <button class="btn btn-ghost" type="button" data-setclose>Abbrechen</button>
                     <button class="btn btn-primary" value="save" id="saveSettings">Speichern</button>
                 </div>
             </footer>
+
         </form>
     </dialog>
 
