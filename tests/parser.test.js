@@ -102,15 +102,15 @@ assert.strictEqual(e2[1].category, '__dienst');
 assert.strictEqual(P.extractBirth('Geburtsdatum: 12.03.1985'), '1985-03');
 assert.strictEqual(P.extractBirth('Jahrgang 1990'), '1990-01');
 // --- Regeln nach Reglement (Pensum-abhängig) ---
-const sobe = rules('sozial', { combine: 'sum', cutoff: 'today', related: ['gesundheit'] });
-sobe.rules.same = { mode: 'threshold', factor: 100, low: 50 };
-sobe.rules.related = { mode: 'threshold', factor: 100, low: 50 };
-sobe.rules.other = { mode: 'pensum', factor: 25, low: 0 };
-sobe.rules.internship = { mode: 'threshold', factor: 50, low: 25 };
-sobe.rules.assistance = { mode: 'pensum', factor: 100, low: 0 };
-sobe.rules.family = { mode: 'flat', factor: 100 / 3, low: 0 };
-sobe.rules.secondEducation = { mode: 'flat', factor: 50, low: 0 };
-const y = (entries) => Math.round(P.compute(entries, sobe, today).exactYears * 1e9) / 1e9;
+const reglement = rules('sozial', { combine: 'sum', cutoff: 'today', related: ['gesundheit'] });
+reglement.rules.same = { mode: 'threshold', factor: 100, low: 50 };
+reglement.rules.related = { mode: 'threshold', factor: 100, low: 50 };
+reglement.rules.other = { mode: 'pensum', factor: 25, low: 0 };
+reglement.rules.internship = { mode: 'threshold', factor: 50, low: 25 };
+reglement.rules.assistance = { mode: 'pensum', factor: 100, low: 0 };
+reglement.rules.family = { mode: 'flat', factor: 100 / 3, low: 0 };
+reglement.rules.secondEducation = { mode: 'flat', factor: 50, low: 0 };
+const y = (entries) => Math.round(P.compute(entries, reglement, today).exactYears * 1e9) / 1e9;
 const one = (cat, pensum) => [{ include: true, start: '2020-01', end: '2020-12', category: cat, pensum }];
 assert.strictEqual(y(one('sozial', 40)), 0.5);      // gleiche Funktion bis 50 %: 50 %
 assert.strictEqual(y(one('sozial', 60)), 1);        // über 50 %: 100 %
@@ -126,16 +126,16 @@ assert.ok(Math.abs(y(fam2) - (0.5 + 1 / 3)) < 1e-9);
 const fam3 = one('sozial', 80).concat(one('__familie', 100)); // 1.0 + 0.333 -> gedeckelt auf 1.0
 assert.ok(Math.abs(y(fam3) - 1) < 1e-9);
 // Stichtag 31.12.: laufende Stelle zählt bis Dezember
-const cut = P.compute([{ include: true, start: '2026-01', end: '', ongoing: true, category: 'sozial', pensum: 100 }], Object.assign({}, sobe, { cutoff: 'yearEnd' }), today);
+const cut = P.compute([{ include: true, start: '2026-01', end: '', ongoing: true, category: 'sozial', pensum: 100 }], Object.assign({}, reglement, { cutoff: 'yearEnd' }), today);
 assert.strictEqual(cut.exactYears, 1);
 // Lohneinreihung: 11–13, Aufstieg nach 12 und 24 Jahren
-const pl = t => P.placement(t, Object.assign({}, sobe, { classMin: 11, classMax: 13 }), null, { classes: { 11: [1,2,3,4,5,6,7,8,9,10], 12: [11,12,13,14,15,16,17,18,19,20], 13: [21,22,23,24,25,26,27,28,29,30] } });
+const pl = t => P.placement(t, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), null, { classes: { 11: [1,2,3,4,5,6,7,8,9,10], 12: [11,12,13,14,15,16,17,18,19,20], 13: [21,22,23,24,25,26,27,28,29,30] } });
 assert.deepStrictEqual([pl(0).cls, pl(0).stage, pl(0).salary], [11, 1, 1]);
 assert.deepStrictEqual([pl(5.9).cls, pl(5.9).stage], [11, 6]);
 assert.deepStrictEqual([pl(12).cls, pl(12).stage, pl(12).salary], [12, 10, 20]);
 assert.deepStrictEqual([pl(30).cls, pl(30).stage], [13, 10]);
-assert.strictEqual(P.placement(3, Object.assign({}, sobe, { classMin: 11, classMax: 13 }), { delta: -1 }).cls, 10);
-assert.strictEqual(P.placement(30, Object.assign({}, sobe, { classMin: 16, classMax: 18 }), { delta: 1, cap: 18 }).cls, 18);
+assert.strictEqual(P.placement(3, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), { delta: -1 }).cls, 10);
+assert.strictEqual(P.placement(30, Object.assign({}, reglement, { classMin: 16, classMax: 18 }), { delta: 1, cap: 18 }).cls, 18);
 // Zweitausbildung erkennen
 const e3 = P.extractEntries('Ausbildung\n2005 – 2008 Lehre als Kauffrau EFZ\n2015 – 2018 Studium Sozialpädagogik HF', S, today);
 assert.strictEqual(e3[0].category, '__ausbildung');

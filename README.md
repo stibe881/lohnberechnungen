@@ -1,8 +1,14 @@
-# Lebenslauf-Rechner
+# Lohnberechnungen – Lebenslauf-Rechner
 
-Web-App, die Lebensläufe (PDF, Word `.docx`, Text) einliest, die Berufserfahrung erkennt und die anrechenbaren Jahre je nach Zielberuf berechnet.
+Web-App, die Lebensläufe (PDF, Word `.docx`, Text) einliest, die Berufserfahrung erkennt, die anrechenbaren Jahre nach den Regeln einer Stelle berechnet und eine Lohneinreihung vorschlägt.
 
-Aufruf: `/lebenslauf-rechner/` (nicht in der Navigation der Website verlinkt, `noindex`).
+## Installation
+
+Die App ist eine statische Web-App ohne Build-Schritt:
+
+- **Lokal ausprobieren:** `python3 -m http.server` im Repository-Ordner starten und `http://localhost:8000` öffnen. Für die Server-Variante der KI-Auswertung stattdessen `php -S localhost:8000` verwenden.
+- **Auf einen Webserver stellen:** Alle Dateien in ein Verzeichnis kopieren (z. B. per FTP). Für die zentrale KI-Auswertung braucht es PHP, siehe unten.
+- Die Seite ist mit `noindex` markiert und erscheint nicht in Suchmaschinen. Für den produktiven Einsatz empfiehlt sich zusätzlich ein Verzeichnisschutz (z. B. `.htaccess` mit Passwort).
 
 ## Funktionen
 
@@ -73,7 +79,7 @@ Hat eine Vorlage Lohnklassen, schlägt die App eine Einreihung vor:
 - **Korrektur:** pro Person wählbar, z. B. −1 Klasse bei fehlender Ausbildung oder +1 mit Obergrenze.
 - **Lohn:** Mit hinterlegter Gehaltstabelle zeigt die App Jahreslohn (100 % und «Pensum neue Stelle») und Monatslohn (13×).
 
-Gehaltstabelle, Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert. Interne Reglemente und Lohntabellen gehören **nicht** in dieses Repository, da die Seite öffentlich erreichbar ist. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert.
+Gehaltstabelle, Vorlagen und Korrekturen werden als Einstellungsdatei (JSON) importiert. Interne Reglemente, Einstellungsdateien und Lohntabellen gehören **nicht** in dieses Repository, denn es ist öffentlich. Die Datei wird intern weitergegeben und in jedem Browser einmal importiert. Die `.gitignore` schliesst `*einstellungen*.json` vorsorglich aus.
 
 Beispiel mit den Standardregeln: 10 Jahre Berufserfahrung, davon 5 als Lehrperson, Vorlage «Lehrperson» → 5 × 100 % + 5 × 50 % = **7,5 Jahre**.
 
@@ -92,5 +98,5 @@ Ohne KI-Auswertung werden die Dateien ausschliesslich lokal im Browser verarbeit
 ## Tests
 
 ```sh
-node lebenslauf-rechner/tests/parser.test.js
+node tests/parser.test.js
 ```

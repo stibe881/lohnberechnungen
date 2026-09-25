@@ -1,0 +1,8 @@
+# Zugangsdaten für die Claude-Weiterleitung
+api/config.php
+
+# Interne Einstellungsdateien (Vorlagen, Gehaltstabellen) nie einchecken
+*einstellungen*.json
+*settings*.json
+
+.DS_Store
