@@ -801,6 +801,145 @@
         return out;
     }
 
+    // --- Besoldungsreglement / Einreihungsplan einlesen ---
+
+    const STOP_WORDS = new Set(['mit', 'ohne', 'und', 'oder', 'der', 'die', 'das', 'für', 'von', 'bzw', 'gemäss', 'stufe', 'mitarbeiter', 'mitarbeitende', 'mitarbeiterin', 'höherer', 'höhere', 'ausbildung', 'fachausbildung', 'funktion', 'zyklus', 'leitung']);
+    /** Stichwörter aus einem Funktionsnamen, z. B. «Dipl. Sozialpädagog*in (HF/FH)» → sozialpädagog, hf, fh. */
+    function keywordsFromName(name) {
+        const words = name.toLowerCase().replace(/\*(?:in|innen|r|e)\b/g, '').replace(/\(([^)]*)\)/g, ' $1 ').split(/[^a-zäöüéèà]+/).filter(Boolean);
+        const out = new Set();
+        for (const w of words) {
+            if (['efz', 'eba', 'hf', 'fh', 'uni'].includes(w)) continue;
+            if (w.length >= 5 && !STOP_WORDS.has(w)) out.add(w.replace(/(?:innen|in|en|e)$/, ''));
+        }
+        const degree = ['efz', 'eba', 'hf', 'fh'].filter(d => new RegExp('\\b' + d + '\\b').test(name.toLowerCase()));
+        const main = [...out][0];
+        if (main) degree.forEach(d => out.add(main + '+' + d));
+        return [...out].filter(k => k.length >= 4);
+    }
+
+    /**
+     * Liest den Einreihungsplan aus dem Text eines Besoldungsreglements (ohne KI). Erwartet eine Tabelle
+     * «Nr. | Funktion | Lohnklasse | Zulagen» (Spalten durch mehrere Leerzeichen getrennt, wie pdf.js sie liefert):
+     * «5.1 Dipl. Sozialpädagog*in (HF/FH)   11 - 13», «gemäss Grundfunktion plus 1 max. 18», «CHF 30'054.00/Jahr».
+     * Dazu Klassenaufstieg («12. und 24. Dienstjahr»), Stichtag 31.12. und 13. Monatslohn.
+     * @returns {{functions: Array, classUpYears: number[]|null, cutoff: string|null, payments: number|null}}
+     */
+    function parseRegulationText(text) {
+        const t = String(text || '').replace(/\r/g, '');
+        const head = t.search(/Nr\.?\s+Funktion\s+Lohnklasse/i);
+        let body = head >= 0 ? t.slice(head) : t;
+        const footnotes = {};
+        for (const m of body.matchAll(/(?:^|\n)\s*(\d)\)\s+([^\n]+)/g)) footnotes[m[1]] = m[2].trim();
+        const endAt = body.search(/\n\s*\d\)\s+\S|\n\s*\d+\s+Zulagen\s*\n|\nNr\.?\s+Zulage/);
+        if (endAt > 0) body = body.slice(0, endAt);
+        const lines = body.split('\n');
+        const functions = [];
+        const joinPart = (a, b) => /[A-Za-zäöü]-$/.test(a) && /^[a-zäöü]/.test(b) ? a.slice(0, -1) + b : a + ' ' + b;
+        const isNoise = l => !l.trim() || /^\s*\d{1,3}\s*$/.test(l) || /^\s*Nr\.?\s/.test(l);
+        const isSection = (l, next) => /^\s*\d{1,2}\.(\s{2,}\S|\s*$)/.test(l) || (next !== undefined && /^\s*\d{1,2}\.\s*$/.test(next));
+        for (let i = 0; i < lines.length; i++) {
+            const m = /^\s*(\d{1,2}\.\d{1,2})\s+(.*)$/.exec(lines[i]);
+            if (!m) continue;
+            const cols = m[2].split(/\s{3,}/).map(c => c.trim()).filter(Boolean);
+            let name = cols[0] || '', pay = cols[1] || '', extra = cols.slice(2).join(' ');
+            const notes = [];
+            for (let j = i + 1; j < lines.length && !/^\s*\d{1,2}\.\d{1,2}\s/.test(lines[j]); j++) {
+                const l = lines[j].trim();
+                if (isNoise(lines[j])) continue;
+                if (isSection(lines[j], lines[j + 1])) break;
+                if (/^(?:tion\b|plus\b|max\.?\s*\d)/i.test(l) || (/-$/.test(pay) && !/-$/.test(name))) pay = joinPart(pay, l);
+                else if (!notes.length && (/-$/.test(name) || (name.split('(').length > name.split(')').length) || l.length <= 25)) name = joinPart(name, l);
+                else if (notes.length) notes[notes.length - 1] = joinPart(notes[notes.length - 1], l);
+                else notes.push(l);
+            }
+            let fn = null, hit;
+            if ((hit = /gemäss\s+Grundfunktion\s+plus\s+(\d+)(?:\s+max\.?\s*(\d{1,2}))?/i.exec(pay))) fn = { baseDelta: +hit[1], classCap: hit[2] ? +hit[2] : null };
+            else if ((hit = /CHF\s*([\d'’.,]+)\s*\/\s*Jahr/i.exec(pay)) && !/max\./i.test(pay)) fn = { fixedAnnual: parseAmount(hit[1]) };
+            else if ((hit = /^(\d{1,2})\s*[-–]\s*(\d{1,2})$/.exec(pay.trim())) && +hit[1] <= +hit[2]) fn = { classMin: +hit[1], classMax: +hit[2] };
+            if (!fn || !name || /\.{4,}/.test(name)) continue;
+            // Lange Klammer-Erläuterungen gehören in den Hinweis, nicht in den Namen
+            const paren = /\s*\(([^)]{30,})\)?\s*$/.exec(name);
+            if (paren) { notes.unshift(paren[1].replace(/\)$/, '')); name = name.slice(0, paren.index); }
+            const fnote = /(\d)\)/.exec(extra);
+            if (fnote && footnotes[fnote[1]]) notes.push(footnotes[fnote[1]]);
+            functions.push(Object.assign({ nr: m[1], name: name.replace(/\s+/g, ' ').trim(), note: notes.join(' ').replace(/\s+/g, ' ').trim() }, fn));
+        }
+        const up = /(\d{1,2})\.\s*und\s*(\d{1,2})\.\s*Dienstjahr/i.exec(t);
+        return {
+            functions,
+            classUpYears: up ? [+up[1], +up[2]] : null,
+            cutoff: /per\s*31\.\s*12\./i.test(t) || /31\.\s*Dezember/i.test(t) ? 'yearEnd' : null,
+            payments: /13\.\s*Monats(?:gehalt|lohn)/i.test(t) ? 13 : null
+        };
+    }
+
+    const slug = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30) || 'beruf';
+
+    /**
+     * Baut Berufe und Vorlagen aus einem eingelesenen Reglement (von Claude oder parseRegulationText).
+     * Fehlende Angaben (z. B. Berufe ohne KI) werden aus den bisherigen Einstellungen übernommen.
+     */
+    function buildFromRegulation(reg, current) {
+        const categories = Array.isArray(reg.categories) && reg.categories.length
+            ? reg.categories.map(c => ({ id: slug(c.id || c.name), name: c.name || c.id, keywords: (c.keywords || []).map(k => String(k).toLowerCase().trim()).filter(Boolean) }))
+            : (current.categories || []).map(c => Object.assign({}, c));
+        const seen = new Set();
+        categories.forEach(c => { while (seen.has(c.id)) c.id += '_2'; seen.add(c.id); });
+        const catIds = new Set(categories.map(c => c.id));
+        const targets = new Set([...catIds, ...TARGETABLE_SPECIALS]);
+        const allCats = categories.concat(SPECIAL_CATEGORIES.filter(c => TARGETABLE_SPECIALS.includes(c.id)));
+        const base = makeTemplate(categories[0].id).rules;
+        const mergeRules = (...parts) => {
+            const out = JSON.parse(JSON.stringify(base));
+            for (const p of parts) for (const k of Object.keys(out)) if (p && p[k] && MODES.some(m => m.id === p[k].mode)) out[k] = { mode: p[k].mode, factor: +p[k].factor || 0, low: +p[k].low || 0 };
+            return out;
+        };
+        const ids = new Set();
+        const templates = (reg.functions || []).map(f => {
+            const name = (f.nr ? f.nr + ' ' : '') + f.name;
+            let target = targets.has(f.target) ? f.target : null;
+            if (!target) target = /assistenz/i.test(f.name) ? '__assistenz' : /praktikant|praktikum/i.test(f.name) ? '__praktikum' : classify(f.name, '', allCats).category || categories[0].id;
+            let id = 'f_' + slug(f.nr || f.name);
+            while (ids.has(id)) id += '_2';
+            ids.add(id);
+            const kws = Array.isArray(f.keywords) && f.keywords.length ? f.keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : keywordsFromName(f.name);
+            return Object.assign(makeTemplate(target, name), {
+                id,
+                related: (f.related || []).filter(r => catIds.has(r) && r !== target),
+                rules: mergeRules(reg.defaultRules, f.rules),
+                combine: reg.combine === 'max' || reg.combine === 'sum' ? reg.combine : 'max',
+                cutoff: reg.cutoff === 'yearEnd' ? 'yearEnd' : 'today',
+                classMin: f.classMin || null, classMax: f.classMax || f.classMin || null,
+                classUpYears: Array.isArray(f.classUpYears) ? f.classUpYears : reg.classUpYears || [12, 24],
+                baseDelta: f.baseDelta != null ? +f.baseDelta : 1, classCap: f.classCap || null,
+                fixedAnnual: f.fixedAnnual || null,
+                payments: reg.payments === 12 ? 12 : 13,
+                keywords: kws,
+                note: (f.note || '').trim(),
+                _baseNr: f.baseNr || null, _needsBase: f.baseDelta != null && !f.classMin && !f.fixedAnnual
+            });
+        });
+        // «gemäss Grundfunktion»: Grundfunktion über die Nummer oder die ähnlichste Funktion mit Lohnklassen
+        const withClasses = templates.filter(t => t.classMin);
+        for (const t of templates) {
+            if (t._needsBase || t._baseNr) {
+                let b = t._baseNr && templates.find(x => x.name.startsWith(t._baseNr + ' ') && x !== t);
+                if (!b) {
+                    const words = t.name.toLowerCase().split(/[^a-zäöü]+/).filter(w => w.length >= 5);
+                    b = withClasses.map(x => ({ x, n: words.filter(w => x.name.toLowerCase().includes(w.slice(0, 7))).length })).sort((a, z) => z.n - a.n)[0];
+                    b = b && b.n > 0 ? b.x : withClasses[0];
+                }
+                if (b) t.baseTemplateId = b.id;
+            }
+            delete t._baseNr; delete t._needsBase;
+        }
+        const classAdjustments = Array.isArray(reg.adjustments) && reg.adjustments.length
+            ? reg.adjustments.filter(a => a && a.label && +a.delta).map((a, i) => ({ id: 'k' + (i + 1) + '_' + slug(a.label).slice(0, 12), label: a.label, delta: +a.delta, cap: null }))
+            : (current.classAdjustments || []).slice();
+        return normalizeSettings(Object.assign({}, current, { categories, templates, classAdjustments }));
+    }
+
     const BIRTH_RE = /(?:geburtsdatum|geb\.|geboren(?:\s+am)?|jahrgang|date of birth|birth ?date|born|date de naissance|né(?:e)? le)\s*:?\s*(?:(\d{1,2})\.\s?(\d{1,2})\.\s?((?:19|20)\d{2})|(\d{1,2})[./-]((?:19|20)\d{2})|((?:19|20)\d{2}))/i;
 
     /** Sucht das Geburtsdatum im Text. Gibt 'YYYY-MM' oder '' zurück. */
@@ -817,7 +956,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

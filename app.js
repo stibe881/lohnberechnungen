@@ -1308,50 +1308,58 @@
     /** Mit den KI-Einstellungen aus dem offenen Dialog (auch wenn noch nicht gespeichert). */
     const draftAiReady = () => draftAi.mode === 'server' ? server.configured : !!draftAi.apiKey;
 
+    const aiOpts = () => draftAi.mode === 'server' ? { serverUrl: SERVER_URL, password: draftAi.password } : { apiKey: draftAi.apiKey };
+    const isPdfFile = f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+
+    /** Liest eine Gehaltstabelle (Excel, CSV, PDF; PDF notfalls mit Claude). Gibt null zurück, wenn keine erkannt wurde. */
+    async function readSalaryFile(f, buf, setBusy) {
+        const name = f.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+        let st = null, readErr = null;
+        try { st = P.parseSalaryTable(await readTableFile(f, buf), name); } catch (err) { readErr = err; }
+        if (!st && isPdfFile(f) && window.CVAi && draftAiReady()) {
+            setBusy('Claude liest die Gehaltstabelle …');
+            const res = await window.CVAi.readSalaryTable(Object.assign({ model: draftAi.model, pdfBase64: toBase64(buf) }, aiOpts()));
+            if (Object.keys(res.classes).length) {
+                st = Object.assign(P.normalizeSalaryTable({ name: res.name || name, validFrom: res.validFrom, classes: res.classes, note: ['von Claude gelesen', res.note].filter(Boolean).join(' · ') }), { monthly: res.monthly });
+            }
+        }
+        if (!st && readErr) throw readErr;
+        return st;
+    }
+    /** Fügt eine gelesene Gehaltstabelle den Einstellungen hinzu (Monatslöhne umrechnen, gleiche Gültigkeit ersetzen). */
+    function addSalaryTable(st) {
+        if (st.monthly && confirm('Die Beträge sehen nach Monatslöhnen aus. Für die Berechnung braucht es Jahreslöhne.\n\nOK = mit 13 multiplizieren (13 Monatslöhne)\nAbbrechen = Beträge unverändert übernehmen')) {
+            for (const k of Object.keys(st.classes)) st.classes[k] = st.classes[k].map(v => Math.round(v * 13 * 100) / 100);
+            st.note = [st.note, 'Monatslöhne × 13 umgerechnet'].filter(Boolean).join(' · ');
+        }
+        delete st.monthly;
+        // Gleiche Gültigkeit wie eine vorhandene Tabelle → ersetzen (Vorlagen, die sie fest gewählt haben, behalten die Wahl)
+        const same = st.validFrom && draft.salaryTables.find(x => x.validFrom === st.validFrom);
+        if (same && confirm(`Es gibt bereits eine Gehaltstabelle gültig ab ${fmtDay(st.validFrom)} («${same.name}»). Ersetzen?\n\nAbbrechen = als zusätzliche Tabelle hinzufügen`)) {
+            st.id = same.id;
+            draft.salaryTables[draft.salaryTables.indexOf(same)] = st;
+        } else {
+            draft.salaryTables.push(st);
+        }
+    }
+    const NO_TABLE = 'In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.';
+
     $('#uploadSalary').addEventListener('change', async e => {
         const f = e.target.files[0];
         e.target.value = '';
         if (!f) return;
-        const isPdf = /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
-        const name = f.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
         const label = e.target.closest('label');
         const setBusy = text => { label.firstChild.textContent = text; };
         setBusy('Gehaltstabelle wird gelesen …');
         readAiForm();
         readSettingsForm();
         try {
-            const buf = await f.arrayBuffer();
-            let st = null, readErr = null;
-            try { st = P.parseSalaryTable(await readTableFile(f, buf), name); } catch (err) { readErr = err; }
-            if (!st && isPdf && window.CVAi && draftAiReady()) {
-                setBusy('Claude liest die Gehaltstabelle …');
-                const res = await window.CVAi.readSalaryTable(Object.assign(
-                    { model: draftAi.model, pdfBase64: toBase64(buf) },
-                    draftAi.mode === 'server' ? { serverUrl: SERVER_URL, password: draftAi.password } : { apiKey: draftAi.apiKey }
-                ));
-                if (Object.keys(res.classes).length) {
-                    st = Object.assign(P.normalizeSalaryTable({ name: res.name || name, validFrom: res.validFrom, classes: res.classes, note: ['von Claude gelesen', res.note].filter(Boolean).join(' · ') }), { monthly: res.monthly });
-                }
-            }
+            const st = await readSalaryFile(f, await f.arrayBuffer(), setBusy);
             if (!st) {
-                if (readErr) throw readErr;
-                alert('In der Datei wurde keine Gehaltstabelle erkannt. Erwartet: pro Zeile die Lohnklasse in der ersten Spalte, danach die Jahreslöhne der Stufen.'
-                    + (isPdf && !draftAiReady() ? '\n\nBei eingescannten oder ungewöhnlich aufgebauten PDFs hilft die KI-Auswertung mit Claude (oben in den Einstellungen einrichten).' : ''));
+                alert(NO_TABLE + (isPdfFile(f) && !draftAiReady() ? '\n\nBei eingescannten oder ungewöhnlich aufgebauten PDFs hilft die KI-Auswertung mit Claude (oben in den Einstellungen einrichten).' : ''));
                 return;
             }
-            if (st.monthly && confirm('Die Beträge sehen nach Monatslöhnen aus. Für die Berechnung braucht es Jahreslöhne.\n\nOK = mit 13 multiplizieren (13 Monatslöhne)\nAbbrechen = Beträge unverändert übernehmen')) {
-                for (const k of Object.keys(st.classes)) st.classes[k] = st.classes[k].map(v => Math.round(v * 13 * 100) / 100);
-                st.note = [st.note, 'Monatslöhne × 13 umgerechnet'].filter(Boolean).join(' · ');
-            }
-            delete st.monthly;
-            // Gleiche Gültigkeit wie eine vorhandene Tabelle → ersetzen (Vorlagen, die sie fest gewählt haben, behalten die Wahl)
-            const same = st.validFrom && draft.salaryTables.find(x => x.validFrom === st.validFrom);
-            if (same && confirm(`Es gibt bereits eine Gehaltstabelle gültig ab ${fmtDay(st.validFrom)} («${same.name}»). Ersetzen?\n\nAbbrechen = als zusätzliche Tabelle hinzufügen`)) {
-                st.id = same.id;
-                draft.salaryTables[draft.salaryTables.indexOf(same)] = st;
-            } else {
-                draft.salaryTables.push(st);
-            }
+            addSalaryTable(st);
             renderSalaryList(st.id);
             renderTemplatesForm();
             document.querySelector(`#salaryList [data-st="${CSS.escape(st.id)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -1359,6 +1367,65 @@
             alert('Die Datei konnte nicht gelesen werden: ' + err.message);
         } finally {
             setBusy('+ Gehaltstabelle hochladen');
+        }
+    });
+
+    /**
+     * «Dokumente einlesen»: Besoldungsreglement (Einreihungsplan) und Gehaltstabelle(n) in einem Schritt.
+     * Gehaltstabellen werden an ihren Zahlenreihen erkannt; das Reglement liest Claude (mit KI-Auswertung)
+     * oder die App selbst (Funktionen, Lohnklassen, Aufstieg, Stichtag).
+     */
+    $('#importDocs').addEventListener('change', async e => {
+        const files = Array.from(e.target.files);
+        e.target.value = '';
+        if (!files.length) return;
+        const label = e.target.closest('label');
+        const setBusy = text => { label.firstChild.textContent = text; };
+        readAiForm();
+        readSettingsForm();
+        const done = [];
+        try {
+            for (const f of files) {
+                setBusy(`«${f.name}» wird gelesen …`);
+                const buf = await f.arrayBuffer();
+                if (!isPdfFile(f)) {
+                    const st = await readSalaryFile(f, buf, setBusy);
+                    if (st) { addSalaryTable(st); done.push(`Gehaltstabelle «${st.name}»`); } else alert(`«${f.name}»: ${NO_TABLE}`);
+                    continue;
+                }
+                // Eine Gehaltstabelle hat viele Zeilen «Klasse + Beträge»
+                const st = P.parseSalaryTable(await pdfToRows(buf.slice(0)), f.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' '));
+                if (st && Object.keys(st.classes).length >= 5) { addSalaryTable(st); done.push(`Gehaltstabelle «${st.name}»`); continue; }
+                let reg, source;
+                if (window.CVAi && draftAiReady()) {
+                    setBusy('Claude liest das Reglement (kann 1–2 Minuten dauern) …');
+                    reg = await window.CVAi.readRegulation(Object.assign({ model: draftAi.model, pdfBase64: toBase64(buf) }, aiOpts()));
+                    source = 'Claude';
+                } else {
+                    reg = P.parseRegulationText(await pdfToText(buf.slice(0)));
+                    source = 'ohne KI';
+                }
+                if (!reg.functions.length) { alert(`«${f.name}»: Kein Einreihungsplan erkannt (Tabelle «Nr. | Funktion | Lohnklasse»).`); continue; }
+                const lines = [
+                    `${reg.functions.length} Funktionen` + (reg.categories && reg.categories.length ? `, ${reg.categories.length} Berufe` : ' (Berufe bleiben wie bisher)'),
+                    reg.classUpYears && reg.classUpYears.length ? `Klassenaufstieg nach ${reg.classUpYears.join(' und ')} Dienstjahren` : '',
+                    reg.cutoff === 'yearEnd' ? 'Stichtag 31.12.' : '',
+                    reg.payments ? `${reg.payments} Monatslöhne` : '',
+                    reg.adjustments && reg.adjustments.length ? `${reg.adjustments.length} Korrekturen` : ''
+                ].filter(Boolean);
+                if (!confirm(`«${f.name}» (gelesen ${source}):\n– ${lines.join('\n– ')}` + (reg.summary ? `\n\n${reg.summary}` : '')
+                    + '\n\nOK = Vorlagen' + (reg.categories && reg.categories.length ? ', Berufe' : '') + ' und Korrekturen durch diese ersetzen (Gehaltstabellen bleiben)\nAbbrechen = nichts ändern')) continue;
+                draft = P.buildFromRegulation(reg, draft);
+                done.push(`Reglement «${f.name}»: ${reg.functions.length} Funktionen`);
+            }
+        } catch (err) {
+            alert('Einlesen fehlgeschlagen: ' + err.message);
+        } finally {
+            setBusy('Dokumente einlesen (Reglement, Gehaltstabelle)');
+        }
+        if (done.length) {
+            renderSettingsForm();
+            $('#importResult').innerHTML = `<span class="ok">${icon('check')} Übernommen: ${esc(done.join(' · '))}.</span> Bitte die Vorlagen kurz prüfen und dann «Speichern».`;
         }
     });
     $('#salaryList').addEventListener('click', e => {

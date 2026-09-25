@@ -120,6 +120,11 @@
             </div>
             <p class="hint">Bei aktiver KI-Auswertung werden die Lebensläufe an Anthropic (USA) gesendet. Bewerbende müssen darüber informiert sein. Schlägt die KI-Auswertung fehl, rechnet die App automatisch mit den Regeln weiter.</p>
 
+            <h3>Aus Dokumenten erstellen</h3>
+            <p class="hint">Besoldungsreglement (mit Einreihungsplan) und Gehaltstabelle als PDF einlesen – auch beide zusammen. Die App erstellt daraus die Vorlagen (Funktionen mit Lohnklassen, «gemäss Grundfunktion», fixe Löhne), Klassenaufstieg, Stichtag und die Gehaltstabelle. Mit KI-Auswertung liest Claude das Reglement vollständig, inklusive Berufe, Stichwörter für den Vorschlag, Anrechnungsregeln und Korrekturen; ohne KI werden Funktionen und Lohnklassen übernommen und die Berufe bleiben wie bisher.</p>
+            <label class="btn btn-ghost">Dokumente einlesen (Reglement, Gehaltstabelle)<input type="file" id="importDocs" multiple accept=".pdf,.xlsx,.xls,.ods,.csv,application/pdf,text/csv" hidden></label>
+            <p class="hint" id="importResult"></p>
+
             <h3>Vorlagen (Stellen)</h3>
             <p class="hint">Eine Vorlage enthält die Anrechnungsregeln für eine Stelle, z. B. nach eurem Lohnreglement. Beim Hochladen wählst du oben die Vorlage aus.</p>
             <div id="tplList" class="tpl-list"></div>

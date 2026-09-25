@@ -283,3 +283,62 @@ Berufserfahrung
 01/2020 – heute Sachbearbeiter Verwaltung, Stiftung XY (Pensum 90%)`, S, today);
 assert.deepStrictEqual(eduFirst.map(e => e.category), ['__ausbildung', 'kaufm', 'kaufm']);
 console.log('Abschnitt «Berufserfahrung» bestanden.');
+
+// Einreihungsplan ohne KI lesen (erfundenes Beispiel im Format von pdf.js)
+const regText = `Inhalt
+2.1 Einleitung ........................................ 3
+Der Aufstieg erfolgt zu Beginn jenes Kalenderjahres, in welchem das 10. und 20. Dienstjahr erfüllt wird.
+Massgebend sind die Dienstjahre per 31.12. des Kalenderjahres. Das 13. Monatsgehalt wird im November ausbezahlt.
+Nr.   Funktion   Lohnklasse   Zulagen
+
+1.   Leitung
+1.1   Gesamtleitung   20 - 23   -
+2.   Betreuung
+2.1   Fachperson Betreuung (Menschen mit Beeinträchti-   10 - 12   -
+gung) EFZ
+2.2   Teamleitung Betreuung   gemäss Grundfunk-   -
+tion plus 1 max. 16
+3
+
+Nr.   Funktion   Lohnklasse   Zulagen
+2.3   Lehrperson Primarstufe   13 - 15   1)
+3.   Ausbildung
+3.1   Praktikant*in   CHF 30'000.00/Jahr   -
+Stufe P2 (mit abgeschlossener Berufsausbildung im nicht pä-
+dagogischen Bereich)
+3.2   Schnupperpraktikum   max. CHF 30.00/Tag   -
+3.3   Lernende*r   gemäss Lehrvertrag   -
+
+1) Zulage für Zusatzausbildung CHF 1'000.00/Jahr`;
+const reg = P.parseRegulationText(regText);
+assert.deepStrictEqual(reg.functions.map(f => f.nr), ['1.1', '2.1', '2.2', '2.3', '3.1']);
+assert.strictEqual(reg.functions[1].name, 'Fachperson Betreuung (Menschen mit Beeinträchtigung) EFZ');
+assert.deepStrictEqual([reg.functions[1].classMin, reg.functions[1].classMax], [10, 12]);
+assert.deepStrictEqual([reg.functions[2].baseDelta, reg.functions[2].classCap], [1, 16]);
+assert.ok(/Zulage für Zusatzausbildung/.test(reg.functions[3].note));
+assert.strictEqual(reg.functions[4].fixedAnnual, 30000);
+assert.ok(/nicht pädagogischen/.test(reg.functions[4].note), reg.functions[4].note);
+assert.deepStrictEqual([reg.classUpYears, reg.cutoff, reg.payments], [[10, 20], 'yearEnd', 13]);
+
+const built = P.buildFromRegulation(reg, S);
+assert.strictEqual(built.templates.length, 5);
+assert.strictEqual(built.categories.length, S.categories.length); // ohne KI: Berufe bleiben
+const lead2 = built.templates.find(t => t.name.startsWith('2.2'));
+assert.ok(lead2.baseTemplateId, 'Grundfunktion gesetzt');
+assert.deepStrictEqual([P.effectiveTemplate(lead2, built.templates).classMin, P.effectiveTemplate(lead2, built.templates).classMax], [11, 13]);
+assert.ok(built.templates.every(t => t.cutoff === 'yearEnd' && t.classUpYears.join() === '10,20'));
+assert.strictEqual(built.templates.find(t => t.name.startsWith('3.1')).target, '__praktikum');
+assert.ok(built.templates.find(t => t.name.startsWith('2.1')).keywords.includes('fachperson+efz'));
+// mit Angaben von Claude: eigene Berufe, Regeln, Korrekturen
+const builtAi = P.buildFromRegulation({
+    categories: [{ id: 'betreuung', name: 'Betreuung', keywords: ['betreu'] }],
+    functions: [{ nr: '2.1', name: 'Fachperson Betreuung', target: 'betreuung', classMin: 10, classMax: 12, keywords: ['fabe'], rules: { other: { mode: 'pensum', factor: 25, low: 0 } } }],
+    defaultRules: { family: { mode: 'flat', factor: 33.33, low: 0 } }, combine: 'sum', cutoff: 'yearEnd', classUpYears: [12, 24], payments: 13,
+    adjustments: [{ label: 'fehlende Ausbildung', delta: -1 }]
+}, S);
+assert.strictEqual(builtAi.categories.length, 1);
+assert.deepStrictEqual(builtAi.templates[0].rules.other, { mode: 'pensum', factor: 25, low: 0 });
+assert.strictEqual(builtAi.templates[0].rules.family.factor, 33.33);
+assert.strictEqual(builtAi.templates[0].combine, 'sum');
+assert.strictEqual(builtAi.classAdjustments[0].delta, -1);
+console.log('Reglement einlesen bestanden.');
