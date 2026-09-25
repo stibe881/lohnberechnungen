@@ -746,3 +746,6 @@ details.section > summary:hover { color: var(--text); }
 .dialog .toasts { position: fixed; }
 .entries-table tr.newjob td { background: var(--good-soft); }
 .entries-table tr.newjob .details { white-space: normal; }
+input.ym { width: 100%; font-variant-numeric: tabular-nums; }
+.entries-table input.ym { min-width: 88px; }
+input.invalid { border-color: #c62828; box-shadow: 0 0 0 2px rgba(198, 40, 40, .15); }

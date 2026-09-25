@@ -1293,6 +1293,33 @@
             + '</p>';
     }
 
+    // --- Monatsfelder: Text «MM.JJJJ» statt Browser-Monatswähler (dort lässt sich das Jahr oft nicht eingeben) ---
+    const ymToText = ym => /^\d{4}-\d{2}$/.test(ym || '') ? ym.slice(5) + '.' + ym.slice(0, 4) : '';
+    const monthInput = (attrs, ym) => `<input type="text" class="ym" inputmode="numeric" placeholder="MM.JJJJ" maxlength="12" autocomplete="off" data-ym ${attrs} value="${esc(ymToText(ym))}" title="Monat und Jahr, z. B. 08.2021 (auch 8/2021, 2021-08 oder nur 2021)">`;
+    const MONTHS_DE = { jan: 1, feb: 2, mär: 3, mar: 3, apr: 4, mai: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, nov: 11, dez: 12 };
+    /** «08.2021», «8/2021», «2021-08», «Aug 2021», «2021» → «YYYY-MM»; leer → ''; unlesbar → null. */
+    function parseYm(text) {
+        const s = String(text || '').trim().toLowerCase();
+        if (!s) return '';
+        let m, y, mo;
+        if ((m = /^(\d{1,2})\s*[./\-\s]\s*(\d{4})$/.exec(s))) { mo = +m[1]; y = +m[2]; }
+        else if ((m = /^(\d{4})\s*[./\-\s]\s*(\d{1,2})$/.exec(s))) { y = +m[1]; mo = +m[2]; }
+        else if ((m = /^([a-zäöü]{3,9})\.?\s*(\d{4})$/.exec(s))) { y = +m[2]; mo = MONTHS_DE[m[1].slice(0, 3)]; }
+        else if ((m = /^(\d{4})$/.exec(s))) { y = +m[1]; mo = 1; }
+        else if ((m = /^(\d{2})(\d{4})$/.exec(s))) { mo = +m[1]; y = +m[2]; }
+        else return null;
+        if (!mo || mo < 1 || mo > 12 || y < 1900 || y > 2100) return null;
+        return `${y}-${String(mo).padStart(2, '0')}`;
+    }
+    /** Liest ein Monatsfeld; bei unlesbarer Eingabe wird das Feld rot markiert und undefined zurückgegeben. */
+    function readYmField(inp) {
+        const v = parseYm(inp.value);
+        inp.classList.toggle('invalid', v === null);
+        if (v === null) { toast(`«${inp.value}» ist kein Monat – bitte als MM.JJJJ eingeben, z. B. 08.2021.`, 'warn'); return undefined; }
+        inp.value = ymToText(v);
+        return v;
+    }
+
     // --- Personenkarte: Kopf, Vorher/Nachher, «Warum?», einklappbare Abschnitte ---
     const SECTIONS_KEY = 'cvrechner.sections.v1';
     let openSections = (() => { try { return JSON.parse(storageGet(SECTIONS_KEY)) || {}; } catch (e) { return {}; } })();
@@ -1404,9 +1431,9 @@
                     ${e.details ? `<div class="details" title="${esc(e.details)}">${esc(e.details)}</div>` : ''}
                 </td>
                 <td class="c-cat"><select data-f="category" aria-label="Beruf">${catOptions(e.category, true)}</select></td>
-                <td class="c-date"><input type="month" data-f="start" value="${esc(e.start)}" aria-label="Von"></td>
+                <td class="c-date">${monthInput('data-f="start" aria-label="Von"', e.start)}</td>
                 <td class="c-date">
-                    ${e.ongoing ? '<div class="today">heute</div>' : `<input type="month" data-f="end" value="${esc(e.end)}" aria-label="Bis">`}
+                    ${e.ongoing ? '<div class="today">heute</div>' : monthInput('data-f="end" aria-label="Bis"', e.end)}
                     <label class="ongoing"><input type="checkbox" data-f="ongoing" ${e.ongoing ? 'checked' : ''}> bis heute</label>
                 </td>
                 <td class="c-small"><div class="suffix"><input type="number" min="0" max="100" data-f="pensum" value="${esc(e.pensum)}" aria-label="Pensum"><em>%</em></div>${e.pensumUnknown && e.include && e.category !== '__ausbildung' ? '<span class="badge" title="Im Lebenslauf steht kein Pensum – 100 % angenommen. Bis 50 % zählt meist nur die Hälfte, bitte prüfen.">Pensum?</span>' : ''}</td>
@@ -1429,7 +1456,7 @@
                 <input type="text" class="name-input" data-cf="name" value="${esc(c.name)}" aria-label="Name">
                 <div class="head-fields">
                     <label class="field"><span>Status</span><select data-cf="status" class="status-select st-${esc(c.status || 'neu')}">${P.STATUSES.map(st => `<option value="${st.id}"${(c.status || 'neu') === st.id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
-                    <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
+                    <label class="field"><span>Geburtsdatum</span>${monthInput('data-cf="birth"', c.birth)}</label>
                     <label class="field"><span>Offene Stelle</span><select data-cf="positionId"><option value="">keine</option>${(settings.positions || []).filter(p => p.status === 'offen' || p.id === c.positionId).map(p => `<option value="${esc(p.id)}"${p.id === c.positionId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</select></label>
                     <label class="field" title="Die neue Stelle zählt ab Stellenantritt bis zum Stichtag als Erfahrung im Zielberuf; laufende Stellen enden damit (wie in der Berechnungsvorlage der Personalabteilung)"><span>Stellenantritt</span><input type="date" data-cf="startDate" value="${esc(c.startDate || '')}"></label>
                     <label class="field" title="Geburtsmonate der Kinder, z. B. 2009-08, 2012-03. Monate mit Kindern unter 18 und Arbeitspensum höchstens ${settings.familyMaxPensum ?? 99} % zählen automatisch als Familienzeit (Einstellungen → Funktionen)."><span>Kinder (Geburtsmonate)</span><input type="text" data-cf="children" value="${esc((c.children || []).join(', '))}" placeholder="z. B. 2009-08, 2012-03"></label>
@@ -1619,9 +1646,12 @@
         }
         if (t.dataset.cf) {
             const lessonsFull = tplOf(c).lessonsFull || 0;
+            let ymVal;
+            if (t.dataset.ym !== undefined) { ymVal = readYmField(t); if (ymVal === undefined) return; }
             c[t.dataset.cf] = t.dataset.cf === 'newPensum' ? Math.max(1, Math.min(100, +t.value || 100))
                 : t.dataset.cf === 'newLessons' ? (t.value === '' ? null : Math.max(0.5, Math.min(lessonsFull, +t.value)))
-                : t.value;
+                : ymVal !== undefined ? ymVal : t.value;
+
             if (t.dataset.cf === 'name') c.autoName = false;
             if (t.dataset.cf === 'startDate') c.startDateEdited = true;
             if (t.dataset.cf === 'children') {
@@ -1637,7 +1667,9 @@
         if (!row || !t.dataset.f) return;
         const entry = c.entries.find(x => x.id === row.dataset.id);
         const f = t.dataset.f;
-        if (t.type === 'checkbox') entry[f] = t.checked;
+        if (t.dataset.ym !== undefined) { const v = readYmField(t); if (v === undefined) return; entry[f] = v; }
+        else if (t.type === 'checkbox') entry[f] = t.checked;
+
         else if (f === 'pensum') entry[f] = t.value === '' ? 100 : Math.max(0, Math.min(100, +t.value));
         else if (f === 'factorOverride') entry[f] = t.value === '' ? null : Math.max(0, Math.min(100, +t.value));
         else entry[f] = t.value;
