@@ -1094,7 +1094,7 @@
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
         'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName',
-        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited', 'children', 'childrenEdited'];
+        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited', 'children', 'childrenEdited', 'docs'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -1215,6 +1215,75 @@
         }).join('');
     }
 
+    // --- Zeugnisse und Belege zu einer Person ---
+    const DOC_KINDS = { arbeitszeugnis: 'Arbeitszeugnis', zwischenzeugnis: 'Zwischenzeugnis', arbeitsbestaetigung: 'Arbeitsbestätigung', arbeitsvertrag: 'Arbeitsvertrag', diplom: 'Diplom / Ausweis', andere: 'Dokument' };
+    /**
+     * Liest Arbeitszeugnisse, Bestätigungen und Diplome (mit Claude oder mit Regeln) und belegt damit die Stellen:
+     * genaue Daten mit Tag und Pensum werden übernommen, unbekannte Stellen ergänzt. Die Dateien selbst werden nicht gespeichert.
+     */
+    async function addDocuments(c, files) {
+        if (!files.length) return;
+        await withBusy(async () => {
+            let useAi = aiActive();
+            if (useAi && !(await ensurePrivacyAck())) useAi = false;
+            const before = clone({ entries: c.entries, docs: c.docs || [] });
+            setProgress(0, files.length, `Zeugnisse werden gelesen (0 von ${files.length}) …`);
+            const docs = [];
+            const errors = [];
+            let n = 0;
+            for (const f of files) {
+                try {
+                    const { text, pdfBase64 } = await readFile(f, useAi);
+                    docs.push({ name: f.name, text, pdfBase64 });
+                } catch (e) { errors.push(`${f.name}: ${e.message}`); }
+                setProgress(++n, files.length, `Zeugnisse werden gelesen (${n} von ${files.length}) …`);
+            }
+            let refs = [];
+            if (docs.length) {
+                if (useAi) {
+                    setProgress(n, files.length, 'Claude liest die Zeugnisse …');
+                    try {
+                        refs = await window.CVAi.readReferences(Object.assign({ model: ai.model, docs, entries: c.entries }, ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }));
+                    } catch (e) { errors.push('KI-Auswertung fehlgeschlagen (' + e.message + ') – Regeln verwendet'); refs = []; }
+                }
+                if (!refs.length) refs = docs.map(d => P.readReferenceText(d.text, d.name));
+            }
+            setProgress(0, 0);
+            const { changed, unmatched } = P.applyReferences(c.entries, refs);
+            // Belege ohne passende Stelle: Arbeitsstellen ergänzen, Diplome nur vermerken
+            let added = 0;
+            for (const ref of unmatched) {
+                if (ref.kind === 'diplom' || !ref.start) continue;
+                const cls = P.classify(ref.title || ref.employer, ref.employer, allCats());
+                c.entries.push({ id: 'e' + Math.random().toString(36).slice(2, 9), include: true, start: ref.start, end: ref.ongoing ? '' : ref.end, ongoing: ref.ongoing, title: ref.title || ref.employer || 'Stelle aus Zeugnis', details: [ref.employer, `aus ${DOC_KINDS[ref.kind] || 'Dokument'} «${ref.file}»`].filter(Boolean).join(' · '), category: cls.category || '__sonstige', pensum: ref.pensum || 100, pensumUnknown: !ref.pensum, factorOverride: null, raw: '', imprecise: false, verified: { file: ref.file, kind: ref.kind, fields: ['neu aus Zeugnis'], note: ref.note || '' } });
+                added++;
+            }
+            c.docs = (c.docs || []).concat(refs.map(r => ({ file: r.file, kind: r.kind, employer: r.employer, title: r.title, start: r.start, end: r.end, ongoing: r.ongoing, pensum: r.pensum, note: r.note, matched: !!changed.find(x => x.ref === r), at: new Date().toISOString() })));
+            render();
+            const parts = [];
+            if (changed.length) parts.push(`${changed.length} Stelle${changed.length > 1 ? 'n' : ''} belegt (${[...new Set(changed.flatMap(x => x.fields))].join(', ') || 'bestätigt'})`);
+            if (added) parts.push(`${added} Stelle${added > 1 ? 'n' : ''} ergänzt`);
+            const dipl = refs.filter(r => r.kind === 'diplom').length;
+            if (dipl) parts.push(`${dipl} Diplom${dipl > 1 ? 'e' : ''} vermerkt`);
+            errors.forEach(e => toast(e, 'warn', { ms: 9000 }));
+            if (!refs.length) { toast('In den Dateien wurden keine Angaben zu Anstellungen gefunden.', 'warn'); return; }
+            undoable(`${refs.length} Dokument${refs.length > 1 ? 'e' : ''} gelesen${useAi ? ' (Claude)' : ''}: ${parts.join(', ') || 'keine Änderung'}.`, () => { Object.assign(c, clone(before)); render(); });
+        });
+    }
+    $('#detail').addEventListener('change', e => {
+        const inp = e.target.closest('input[data-docs]');
+        if (!inp) return;
+        const c = candidates.find(x => x.id === selectedId);
+        const files = Array.from(inp.files);
+        inp.value = '';
+        if (c && !c.loading) addDocuments(c, files).catch(err => toast('Zeugnisse konnten nicht gelesen werden: ' + err.message, 'error'));
+    });
+    /** Liste der gelesenen Belege einer Person. */
+    function docsHtml(c) {
+        const docs = c.docs || [];
+        if (!docs.length) return '';
+        return `<div class="docs">${icon('file')} <b>Belege:</b> ${docs.map(d => `<span class="doc-chip" title="${esc([d.employer, d.title, d.start ? fmtDay(d.start) + (d.ongoing ? ' – heute' : d.end ? ' – ' + fmtDay(d.end) : '') : '', d.pensum ? d.pensum + ' %' : '', d.note].filter(Boolean).join(' · '))}">${esc(DOC_KINDS[d.kind] || 'Dokument')} «${esc(d.file)}»${d.matched ? '' : d.kind === 'diplom' ? '' : ' <em>(keine Stelle zugeordnet)</em>'}</span>`).join(', ')}<span class="hint"> – Dateien werden nicht gespeichert, nur die ausgelesenen Angaben.</span></div>`;
+    }
     /** Hinweis, wenn bei angerechneten Stellen kein Pensum im Lebenslauf steht (100 % angenommen). */
     function pensumNoticeHtml(c) {
         const list = c.entries.filter(e => e.pensumUnknown && e.include && e.category !== '__ausbildung' && e.category !== '__familie');
@@ -1460,6 +1529,7 @@
                 <td class="c-title">
                     <input type="text" data-f="title" value="${esc(e.title)}" aria-label="Funktion">
                     ${e.details ? `<div class="details" title="${esc(e.details)}">${esc(e.details)}</div>` : ''}
+                    ${e.verified ? `<span class="badge badge-ok" title="Belegt durch ${esc(DOC_KINDS[e.verified.kind] || 'Dokument')} «${esc(e.verified.file)}»${(e.verified.fields || []).length ? ' – übernommen: ' + esc(e.verified.fields.join(', ')) : ''}${e.verified.note ? ' – ' + esc(e.verified.note) : ''}">${icon('check')} belegt</span>` : ''}
                 </td>
                 <td class="c-cat"><select data-f="category" aria-label="Beruf">${catOptions(e.category, true)}</select></td>
                 <td class="c-date">${dateInput('data-f="start" aria-label="Von (erster Tag)"', e.start, false)}</td>
@@ -1505,6 +1575,7 @@
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
             ${heroHtml(c, r, t, pl0)}
             ${duplicateHtml(c)}
+            ${docsHtml(c)}
             ${pensumNoticeHtml(c)}
             ${suggestionHtml(c)}
             ${correctionsHtml(c)}
@@ -1515,6 +1586,7 @@
             <div class="detail-actions">
                 <button class="btn btn-ghost btn-sm" type="button" data-action="add">${icon('plus')} Stelle hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="reparse">Neu auswerten</button>
+                <label class="btn btn-ghost btn-sm" title="Arbeitszeugnisse, Arbeitsbestätigungen oder Diplome hinzufügen: Die App liest Ein-/Austrittsdatum und Pensum heraus und belegt damit die Stellen aus dem Lebenslauf.">${icon('file')} Zeugnisse hinzufügen<input type="file" multiple data-docs accept=".pdf,.docx,.txt,application/pdf" hidden></label>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="report">Bericht (PDF)</button>
                 <button class="btn btn-ghost btn-sm" type="button" data-action="hrxlsx" title="Excel im Aufbau der Berechnungsvorlage der Personalabteilung (Zuordnung 1–6, Tage, Anrechnung, Σ DJ)">${icon('download')} Excel (Vorlage Personal)</button>
                 ${pl0 ? `<button class="btn btn-primary btn-sm" type="button" data-action="salary">${icon('file')} Lohnblatt (PDF)</button>` : ''}
@@ -1839,7 +1911,8 @@
             // Fussnote: gleichzeitige Tätigkeiten (die Vorlage summiert sie; die App begrenzt pro Monat auf 100 %)
             const overlaps = e.include ? c.entries.filter(o => o !== e && o.include && P.dateStart(o.start) !== null && (o.ongoing || P.dateEnd(o.end) !== null)
                 && P.dateStart(o.start) <= en0 && (o.ongoing ? Infinity : P.dateEnd(o.end)) >= s0 && P.weightFor(o, t) > 0).map(o => `«${o.title}»`) : [];
-            const notes = [e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '' ? 'Anrechnung manuell gesetzt' : '', overlaps.length ? 'gleichzeitig mit ' + overlaps.join(', ') : ''].filter(Boolean).join('; ');
+            const notes = [e.verified ? `belegt durch ${DOC_KINDS[e.verified.kind] || 'Dokument'} «${e.verified.file}»` : '', e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '' ? 'Anrechnung manuell gesetzt' : '', overlaps.length ? 'gleichzeitig mit ' + overlaps.join(', ') : ''].filter(Boolean).join('; ');
+
             rows.push([`${P.hrCategory(key, t)} ${P.HR_CATEGORY_NAMES[P.hrCategory(key, t)]}`, [e.title, e.details].filter(Boolean).join(' – '), von, bis, +e.pensum || 0, days > 0 ? days : '', Math.round(factor * 100) / 100, dj === null ? '' : Math.round(dj * 10000) / 10000, e.include ? '' : 'x', notes]);
 
         });

@@ -749,3 +749,7 @@ details.section > summary:hover { color: var(--text); }
 input.ym { width: 100%; font-variant-numeric: tabular-nums; }
 .entries-table input.ym { min-width: 88px; }
 input.invalid { border-color: #c62828; box-shadow: 0 0 0 2px rgba(198, 40, 40, .15); }
+.docs { font-size: .85rem; background: var(--good-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; }
+.doc-chip { white-space: nowrap; }
+.doc-chip em { color: var(--warn); font-style: normal; }
+.entries-table .badge-ok { margin-left: 0; margin-top: 2px; display: inline-block; }

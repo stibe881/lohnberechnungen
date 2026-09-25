@@ -376,6 +376,63 @@ export async function readRegulation({ apiKey, serverUrl, password, model, pdfBa
 }
 
 /** Prüft, ob neben der App ein eingerichteter Server (api/claude.php) läuft. */
+const REFERENCES_PROMPT = `Du liest Arbeitszeugnisse, Arbeitsbestätigungen, Zwischenzeugnisse, Arbeitsverträge und Diplome einer Bewerberin oder eines Bewerbers und ordnest sie den Stellen aus dem Lebenslauf zu. Ziel: genaue Ein- und Austrittsdaten (mit Tag) und das Pensum jeder Stelle belegen.
+
+Regeln:
+- Pro Dokument ein Eintrag in documents: kind (arbeitszeugnis, zwischenzeugnis, arbeitsbestaetigung, arbeitsvertrag, diplom, andere), employer (Arbeitgeber/Institution wie im Dokument), title (Funktion wie im Dokument), start_*/end_* (Tag, Monat, Jahr aus dem Dokument; null wenn nicht genannt), ongoing = true wenn das Anstellungsverhältnis laut Dokument noch besteht (Zwischenzeugnis, «seit»), pensum in Prozent (null wenn nicht genannt; bei wechselnden Pensen das zuletzt genannte, Verlauf in note), entry_id = id der passenden Stelle aus <lebenslauf> (gleicher Arbeitgeber oder gleicher Zeitraum), sonst null.
+- Ausbildungsdokumente (Diplome, Fähigkeitszeugnisse): kind diplom, Datum des Abschlusses als end_*, start_* wenn genannt.
+- Erfinde nichts. Was nicht im Dokument steht, ist null. note: kurze Bemerkung zu Abweichungen gegenüber dem Lebenslauf oder zu Pensumsänderungen, sonst "".`;
+const intOrNull2 = { type: ['integer', 'null'] };
+const REFERENCES_SCHEMA = {
+    type: 'object', additionalProperties: false, required: ['documents'],
+    properties: {
+        documents: {
+            type: 'array',
+            items: {
+                type: 'object', additionalProperties: false,
+                required: ['file', 'kind', 'employer', 'title', 'start_year', 'start_month', 'start_day', 'end_year', 'end_month', 'end_day', 'ongoing', 'pensum', 'entry_id', 'note'],
+                properties: {
+                    file: { type: 'string' }, kind: { type: 'string', enum: ['arbeitszeugnis', 'zwischenzeugnis', 'arbeitsbestaetigung', 'arbeitsvertrag', 'diplom', 'andere'] },
+                    employer: { type: 'string' }, title: { type: 'string' },
+                    start_year: intOrNull2, start_month: intOrNull2, start_day: intOrNull2, end_year: intOrNull2, end_month: intOrNull2, end_day: intOrNull2,
+                    ongoing: { type: 'boolean' }, pensum: intOrNull2, entry_id: { type: ['string', 'null'] }, note: { type: 'string' }
+                }
+            }
+        }
+    }
+};
+/**
+ * Liest Arbeitszeugnisse und Belege und ordnet sie den Stellen des Lebenslaufs zu.
+ * docs = [{name, text?, pdfBase64?}], entries = Stellen der Person.
+ * @returns {Promise<Array<{file, kind, employer, title, start, end, ongoing, pensum, entryId, note}>>}
+ */
+export async function readReferences({ apiKey, serverUrl, password, model, docs, entries }) {
+    const client = makeClient({ apiKey, serverUrl, password });
+    const content = [];
+    const list = entries.map(e => `- id ${e.id}: ${e.title}${e.details ? ' (' + e.details + ')' : ''}, ${e.start} – ${e.ongoing ? 'heute' : e.end}, Pensum ${e.pensum} %`).join('\n');
+    content.push({ type: 'text', text: '<lebenslauf>\n' + list + '\n</lebenslauf>' });
+    for (const d of docs) {
+        content.push({ type: 'text', text: `Dokument «${d.name}»:` });
+        if (d.pdfBase64) content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: d.pdfBase64 } });
+        else content.push({ type: 'text', text: '<dokument>\n' + (d.text || '') + '\n</dokument>' });
+    }
+    content.push({ type: 'text', text: 'Lies die Dokumente aus und ordne sie den Stellen zu. Trage in file den Dateinamen ein.' });
+    const data = await createJson(client, {
+        model: model || DEFAULT_MODEL,
+        max_tokens: 16000,
+        system: REFERENCES_PROMPT,
+        messages: [{ role: 'user', content }],
+        output_config: { effort: 'medium', format: { type: 'json_schema', schema: REFERENCES_SCHEMA } }
+    }, !!serverUrl, 'Die Dokumente sind zusammen zu gross – bitte weniger auf einmal hinzufügen.');
+    const iso = (y, m, d) => Number.isInteger(y) && y > 1900 && y < 2100 ? `${y}-${pad(validMonth(m) ?? 1)}` + (validMonth(m) && validDay(d, y, m) ? '-' + pad(d) : '') : '';
+    return (data.documents || []).map(d => ({
+        file: d.file || '', kind: d.kind || 'andere', employer: (d.employer || '').trim(), title: (d.title || '').trim(),
+        start: iso(d.start_year, d.start_month, d.start_day), end: d.ongoing ? '' : iso(d.end_year, d.end_month, d.end_day), ongoing: !!d.ongoing,
+        pensum: Number.isInteger(d.pensum) && d.pensum > 0 && d.pensum <= 100 ? d.pensum : null,
+        entryId: entries.some(e => e.id === d.entry_id) ? d.entry_id : null, note: (d.note || '').trim()
+    }));
+}
+
 export async function checkServer(serverUrl) {
     try {
         const res = await fetch(serverUrl + '/status', { cache: 'no-store' });
@@ -387,5 +444,6 @@ export async function checkServer(serverUrl) {
     }
 }
 
-window.CVAi = { analyze, readSalaryTable, readRegulation, checkServer, MODELS, DEFAULT_MODEL };
+window.CVAi = { analyze, readSalaryTable, readRegulation, readReferences, checkServer, MODELS, DEFAULT_MODEL };
+
 window.dispatchEvent(new Event('cvai-ready'));

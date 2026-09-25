@@ -510,3 +510,24 @@ assert.deepStrictEqual(P.extractChildren('Praktikum Kinderkrippe 2015', hrToday)
 const famAll = paEntries.filter(e => e.category !== '__familie' && e.category !== '__assistenz').concat(famAuto, paE('2026-06', '2026-12', 80, '__assistenz'));
 assert.strictEqual(P.compute(famAll, paTpl, hrToday).exactYears.toFixed(2), '17.80');
 console.log('Familienzeit automatisch (Kinder) bestanden.');
+
+// Arbeitszeugnisse ohne KI: Zeitraum mit Tag, Pensum, Zuordnung zur Stelle
+const zeugnis = 'Stiftung Beispiel Zuwebe\nArbeitszeugnis\nFrau A. B., geboren am 12. April 1985, war vom 1. Juli 2021 bis 30. November 2022 als Köchin in einem Pensum von 80 % bei uns tätig.';
+const zwischen = 'Restaurant Dörfli Allenwinden\nZwischenzeugnis\nFrau A. B. ist seit dem 01.01.2016 mit einem Beschäftigungsgrad von 30 % als Köchin angestellt.';
+const refA = P.readReferenceText(zeugnis, 'zeugnis.pdf'), refB = P.readReferenceText(zwischen, 'zwischenzeugnis.pdf');
+assert.deepStrictEqual([refA.kind, refA.start, refA.end, refA.pensum, refA.ongoing], ['arbeitszeugnis', '2021-07-01', '2022-11-30', 80, false]);
+assert.deepStrictEqual([refB.kind, refB.start, refB.end, refB.pensum, refB.ongoing], ['zwischenzeugnis', '2016-01-01', '', 30, true]);
+const zEntries = [
+    { id: 'z1', title: 'Koch, Stv. Standortleitung (Teilzeit)', details: 'Stiftung Zuwebe, Zug', start: '2021-07', end: '2022-11', ongoing: false, pensum: 100, pensumUnknown: true, category: 'gastro', include: true },
+    { id: 'z2', title: 'Koch / Mitarbeiterin Service', details: 'Restaurant Dörfli, Allenwinden', start: '2016-01', end: '', ongoing: true, pensum: 100, category: 'gastro', include: true },
+    { id: 'z3', title: 'Köchin EFZ', details: '', start: '2005-08', end: '2008-07', ongoing: false, pensum: 100, category: '__ausbildung', include: false }
+];
+const applied = P.applyReferences(zEntries, [refA, refB, P.readReferenceText('Diplom Köchin EFZ, ausgestellt am 15. Juli 2008', 'efz.pdf')]);
+assert.deepStrictEqual(applied.changed.map(x => x.entry.id), ['z1', 'z2']);
+assert.deepStrictEqual([zEntries[0].start, zEntries[0].end, zEntries[0].pensum, zEntries[0].pensumUnknown, zEntries[0].verified.fields], ['2021-07-01', '2022-11-30', 80, false, ['Beginn', 'Ende', 'Pensum']]);
+assert.deepStrictEqual([zEntries[1].start, zEntries[1].ongoing, zEntries[1].pensum], ['2016-01-01', true, 30]);
+assert.strictEqual(applied.unmatched.length, 1); // Diplom wird nicht zugeordnet
+// Zuordnung per entryId (von Claude) hat Vorrang
+const byId = P.applyReferences([{ id: 'q', title: 'Irgendwas', details: '', start: '2010-01', end: '2011-01', ongoing: false, pensum: 100, category: 'x', include: true }], [Object.assign({}, refA, { entryId: 'q' })]);
+assert.strictEqual(byId.changed.length, 1);
+console.log('Arbeitszeugnisse (Regeln) bestanden.');

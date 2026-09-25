@@ -718,8 +718,89 @@
         return [...new Set(out)];
     }
 
+    // --- Arbeitszeugnisse und Belege (ohne KI): Zeitraum, Pensum und Arbeitgeber aus dem Text ---
+    const MONTH_WORD = '(?:jan(?:uar)?|feb(?:ruar)?|m[äa]rz|apr(?:il)?|mai|jun[i]?|jul[i]?|aug(?:ust)?|sep(?:t(?:ember)?)?|okt(?:ober)?|nov(?:ember)?|dez(?:ember)?)';
+    const DAY_DATE = new RegExp('(\\d{1,2})\\.?\\s*(?:(\\d{1,2})\\.|(' + MONTH_WORD + ')\\.?)\\s*(\\d{4})', 'i');
+    function parseDayDate(s) {
+        const m = DAY_DATE.exec(s || '');
+        if (!m) return '';
+        const d = +m[1], y = +m[4];
+        const mo = m[2] ? +m[2] : MONTHS[m[3].toLowerCase().slice(0, 3)] || MONTHS[m[3].toLowerCase()];
+        if (!mo || mo < 1 || mo > 12 || d < 1 || d > 31 || y < 1900) return '';
+        return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+    /**
+     * Liest ein Arbeitszeugnis oder eine Arbeitsbestätigung (Text): Zeitraum «vom 1. August 2021 bis 31. Mai 2026»,
+     * «seit 1. Juni 2023», Pensum «80 %», Funktion und Arbeitgeber (Briefkopf), Art des Dokuments.
+     * @returns {{kind, employer, title, start, end, ongoing, pensum, note}}
+     */
+    function readReferenceText(text, fileName) {
+        const t = String(text || '').replace(/\s+/g, ' ');
+        const lower = t.toLowerCase();
+        const kind = /zwischenzeugnis/.test(lower) ? 'zwischenzeugnis' : /arbeitszeugnis|zeugnis/.test(lower) ? 'arbeitszeugnis' : /arbeitsbest[äa]tigung/.test(lower) ? 'arbeitsbestaetigung' : /arbeitsvertrag|anstellungsvertrag/.test(lower) ? 'arbeitsvertrag' : /diplom|f[äa]higkeitszeugnis|zertifikat|bachelor|master/.test(lower) ? 'diplom' : 'andere';
+        let start = '', end = '', ongoing = false;
+        const dateRe = '(\\d{1,2}\\.?\\s*(?:\\d{1,2}\\.|' + MONTH_WORD + '\\.?)\\s*\\d{4})';
+        let m = new RegExp('(?:vom|von|ab|seit)\\s+' + dateRe + '\\s+(?:bis(?:\\s+(?:zum|am))?|–|-)\\s+' + dateRe, 'i').exec(t)
+            || new RegExp(dateRe + '\\s*(?:–|-|bis)\\s*' + dateRe, 'i').exec(t);
+        if (m) { start = parseDayDate(m[1]); end = parseDayDate(m[2]); }
+        else if ((m = new RegExp('(?:seit|ab)\\s+(?:dem\\s+)?' + dateRe, 'i').exec(t))) { start = parseDayDate(m[1]); ongoing = true; }
+        else if ((m = new RegExp('(?:eingetreten|eintritt|angestellt)\\D{0,30}?' + dateRe, 'i').exec(t))) { start = parseDayDate(m[1]); ongoing = /zwischenzeugnis|weiterhin|nach wie vor/.test(lower); }
+        if (!end && !ongoing && start && (m = new RegExp('(?:austritt|verl[äa]sst|verliess|ausgetreten|bis)\\D{0,30}?' + dateRe, 'i').exec(t))) end = parseDayDate(m[1]);
+        if (kind === 'zwischenzeugnis' && !end) ongoing = true;
+        let pensum = null;
+        const pm = /(?:pensum|besch[äa]ftigungsgrad|anstellungsgrad|arbeitspensum|teilzeit|im umfang|stellenprozent)\D{0,25}?(\d{2,3})\s*%/i.exec(t) || /(\d{2,3})\s*%[- ]?(?:pensum|anstellung|stelle|teilzeit)/i.exec(t) || /(?:zu|mit)\s+(\d{2,3})\s*%/i.exec(t);
+        if (pm && +pm[1] >= 5 && +pm[1] <= 100) pensum = +pm[1];
+        const tm = /\bals\s+([A-ZÄÖÜ][^,.;()]{3,60}?)(?=\s+(?:t[äa]tig|angestellt|besch[äa]ftigt|in unserem|bei uns|im\b|an\b|eingetreten|zu\b|mit\b|ein\b)|[,.;])/.exec(t);
+        const title = tm ? tm[1].trim() : '';
+        const firstLine = String(text || '').split(/\r?\n/).map(s => s.trim()).find(s => s.length > 2 && !/^(arbeits|zwischen)?zeugnis|bestätigung/i.test(s)) || '';
+        return { kind, employer: firstLine.slice(0, 80), title, start, end, ongoing, pensum, note: '', file: fileName || '' };
+    }
+    /**
+     * Wendet gelesene Belege auf die Stellen an: passende Stelle (gleiche Arbeitgeber-Wörter oder überlappender Zeitraum)
+     * erhält Daten mit Tag und Pensum aus dem Beleg und wird als «belegt» markiert. Belege ohne passende Stelle werden zurückgegeben.
+     * @returns {{changed: Array<{entry, fields}>, unmatched: Array}}
+     */
+    function applyReferences(entries, refs) {
+        const words = s => new Set(fold(String(s || '').toLowerCase()).split(/[^a-z0-9]+/).filter(w => w.length > 3 && !/^(stiftung|schule|verein|gmbh|ag|restaurant|hotel|klinik|spital|zentrum|kanton|gemeinde|stadt|zürich|zuerich|zug|bern|luzern|basel|und|der|die|das|für|fuer|mit|von|dem|den|des)$/.test(w)));
+        const changed = [], unmatched = [];
+        for (const ref of refs) {
+            if (ref.kind === 'diplom' || (!ref.start && !ref.end)) { unmatched.push(ref); continue; }
+            let best = null;
+            if (ref.entryId) best = entries.find(e => e.id === ref.entryId) || null;
+            if (!best) {
+                const rw = words(ref.employer + ' ' + ref.title);
+                const rs = dateStart(ref.start), re = ref.ongoing ? Infinity : dateEnd(ref.end);
+                let bestScore = 0;
+                for (const e of entries) {
+                    if (e.category === '__ausbildung' || e.category === '__familie') continue;
+                    const ew = words(e.title + ' ' + e.details);
+                    let score = [...rw].filter(w => ew.has(w)).length * 3;
+                    const es = dateStart(e.start), ee = e.ongoing ? Infinity : dateEnd(e.end);
+                    if (rs !== null && es !== null && rs <= (ee ?? Infinity) && (re ?? Infinity) >= es) {
+                        score += 2;
+                        if (Math.abs(rs - es) <= 45) score += 2; // gleicher Beginn (±1.5 Monate)
+                    }
+                    if (score > bestScore) { bestScore = score; best = e; }
+                }
+                if (bestScore < 3) best = null;
+            }
+            if (!best) { unmatched.push(ref); continue; }
+            const fields = [];
+            if (ref.start && ref.start !== best.start) { best.start = ref.start; fields.push('Beginn'); }
+            if (ref.ongoing && !best.ongoing) { best.ongoing = true; best.end = ''; fields.push('laufend'); }
+            else if (!ref.ongoing && ref.end && (ref.end !== best.end || best.ongoing)) { best.end = ref.end; best.ongoing = false; fields.push('Ende'); }
+            if (ref.pensum && ref.pensum !== +best.pensum) { best.pensum = ref.pensum; fields.push('Pensum'); }
+            if (ref.pensum) best.pensumUnknown = false;
+            best.imprecise = false;
+            best.verified = { file: ref.file || '', kind: ref.kind, fields, note: ref.note || '' };
+            changed.push({ entry: best, fields, ref });
+        }
+        return { changed, unmatched };
+    }
+
     /** Anrechnung eines Monats für diesen Eintrag in Prozent (0–100). */
     function weightFor(entry, tpl) {
+
 
 
         if (entry.factorOverride !== null && entry.factorOverride !== undefined && entry.factorOverride !== '') return Math.max(0, Math.min(100, +entry.factorOverride));
@@ -1358,7 +1439,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, extractChildren, familyEntries, cutoffIndex, dateStart, dateEnd, dayToIso, DAYS_PER_YEAR, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+    const api = { extractEntries, extractBirth, extractChildren, familyEntries, readReferenceText, applyReferences, cutoffIndex, dateStart, dateEnd, dayToIso, DAYS_PER_YEAR, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
 
  parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
