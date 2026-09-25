@@ -68,6 +68,7 @@
         lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
         pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
         x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
         check: '<path d="M20 6 9 17l-5-5"/>',
         clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
         file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
@@ -1241,7 +1242,8 @@
             const m = st[view] || {};
             const cell = v => v == null ? '' : Number.isInteger(v) ? String(v) : v.toFixed(2);
             return `<details class="tpl-item" data-st="${esc(st.id)}" ${open.has(st.id) ? 'open' : ''}>
-                <summary><span class="tpl-name">${esc(st.name)}</span><span class="tpl-target" data-sum>${salarySummary(st)}</span></summary>
+                <summary><span class="tpl-name">${esc(st.name)}</span><span class="tpl-target" data-sum>${salarySummary(st)}</span>
+                    <button class="btn-icon summary-action" type="button" data-delst="${esc(st.id)}" title="Gehaltstabelle löschen" aria-label="Gehaltstabelle «${esc(st.name)}» löschen">${icon('trash')}</button></summary>
                 <div class="tpl-body">
                     <div class="grid-2">
                         <label class="field"><span>Bezeichnung</span><input type="text" data-sf="name" value="${esc(st.name)}"></label>
@@ -1251,7 +1253,7 @@
                     <div data-warn>${salaryWarnings(st)}</div>
                     <div class="salary-row">
                         ${kinds.length > 1 ? `<label class="field inline"><span>Anzeigen</span><select data-sview>${kinds.map(k => `<option value="${k.id}"${k.id === view ? ' selected' : ''}>${k.name}</option>`).join('')}</select></label>` : '<span></span>'}
-                        <button class="btn btn-ghost btn-sm" type="button" data-delst="${esc(st.id)}">Tabelle löschen</button>
+                        <button class="btn btn-ghost btn-sm btn-danger" type="button" data-delst="${esc(st.id)}">${icon('trash')} Tabelle löschen</button>
                     </div>
                     <div class="table-scroll"><table class="table salary-table">
                         <thead><tr><th>LK</th>${Array.from({ length: stages }, (_, i) => `<th class="num">Stufe ${i + 1}</th>`).join('')}</tr></thead>
@@ -1520,6 +1522,15 @@
     /** Mit den KI-Einstellungen aus dem offenen Dialog (auch wenn noch nicht gespeichert). */
     const draftAiReady = () => draftAi.mode === 'server' ? server.configured : !!draftAi.apiKey;
 
+    /** Zeigt auf einem Button-Label einen Fortschrittstext (null = ursprünglicher Text); das Icon bleibt. */
+    function busyLabel(label) {
+        const node = [...label.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+        const original = node ? node.textContent : '';
+        return text => {
+            if (node) node.textContent = text === null ? original : ' ' + text;
+            label.classList.toggle('busy', text !== null);
+        };
+    }
     const aiOpts = () => draftAi.mode === 'server' ? { serverUrl: SERVER_URL, password: draftAi.password } : { apiKey: draftAi.apiKey };
     const isPdfFile = f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
 
@@ -1561,7 +1572,7 @@
         e.target.value = '';
         if (!f) return;
         const label = e.target.closest('label');
-        const setBusy = text => { label.firstChild.textContent = text; };
+        const setBusy = busyLabel(label);
         setBusy('Gehaltstabelle wird gelesen …');
         readAiForm();
         readSettingsForm();
@@ -1578,7 +1589,7 @@
         } catch (err) {
             alert('Die Datei konnte nicht gelesen werden: ' + err.message);
         } finally {
-            setBusy('+ Gehaltstabelle hochladen');
+            setBusy(null);
         }
     });
 
@@ -1592,7 +1603,7 @@
         e.target.value = '';
         if (!files.length) return;
         const label = e.target.closest('label');
-        const setBusy = text => { label.firstChild.textContent = text; };
+        const setBusy = busyLabel(label);
         readAiForm();
         readSettingsForm();
         const done = [];
@@ -1633,7 +1644,7 @@
         } catch (err) {
             alert('Einlesen fehlgeschlagen: ' + err.message);
         } finally {
-            setBusy('Dokumente einlesen (Reglement, Gehaltstabelle)');
+            setBusy(null);
         }
         if (done.length) {
             renderSettingsForm();
@@ -1643,6 +1654,7 @@
     $('#salaryList').addEventListener('click', e => {
         const del = e.target.closest('[data-delst]');
         if (!del) return;
+        e.preventDefault(); // Klick im Tabellenkopf soll die Tabelle nicht auf-/zuklappen
         readSettingsForm();
         const st = draft.salaryTables.find(x => x.id === del.dataset.delst);
         const used = draft.templates.filter(t => t.salaryTableId === st.id);

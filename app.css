@@ -96,7 +96,7 @@ h3 { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spaci
 .field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; }
 .field > span { font-weight: 600; color: var(--muted); }
 [hidden] { display: none !important; }
-input[type="text"], input[type="password"], input[type="number"], input[type="month"], select, textarea {
+input[type="text"], input[type="password"], input[type="number"], input[type="month"], input[type="date"], select, textarea {
     font: inherit; font-size: .9rem; color: var(--text);
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     padding: 7px 10px; width: 100%; min-width: 0;
@@ -446,3 +446,6 @@ input.switch:disabled { opacity: .45; cursor: not-allowed; }
     .set-foot > .hint { display: none; }
 }
 .pane-toolbar > span:empty { flex: 1; }
+.tpl-item summary .summary-action { margin-left: auto; align-self: center; }
+.summary-action:hover { color: #b3261e; background: #fdecea; border-radius: 6px; }
+label.btn.busy { opacity: .75; pointer-events: none; }
