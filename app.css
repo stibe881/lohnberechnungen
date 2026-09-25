@@ -744,3 +744,5 @@ details.section > summary:hover { color: var(--text); }
 .flash { animation: flash 1.6s ease-out; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .dialog .toasts { position: fixed; }
+.entries-table tr.newjob td { background: var(--good-soft); }
+.entries-table tr.newjob .details { white-space: normal; }

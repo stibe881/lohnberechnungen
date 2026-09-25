@@ -76,6 +76,13 @@
             if (OPEN_START_RE.test(line.slice(0, a.index))) {
                 const kw = line.slice(0, a.index).match(OPEN_START_RE);
                 ranges.push(buildRange(a, { present: true }, today, a.index - kw[0].length, a.end));
+                continue;
+            }
+            // «08. 2025 –   (12%) Firmvorbereitung» / «2024 –   Pfarreirat»: Datum, Strich, danach kein zweites Datum → bis heute
+            const after = line.slice(a.end);
+            const dash = after.match(/^\s*(?:-{1,2}|–|—|‒)\s*(?=\S)/);
+            if (dash && !(b && b.index === a.end + dash[0].length) && !ranges.length) {
+                ranges.push(buildRange(a, { present: true }, today, a.index, a.end + dash[0].length));
             }
         }
         return ranges;
@@ -101,7 +108,9 @@
     // --- Abschnitte ---
     const SECTION_PATTERNS = [
         ['experience', /^(?:beruf(?:liche[rns]?|s)?\s*(?:erfahrung(?:en)?|werdegang|tätigkeit(?:en)?|laufbahn|praxis|stationen)|werdegang|erfahrung|arbeitserfahrung|berufspraxis|praxiserfahrung|tätigkeiten|anstellungen|work experience|professional experience|experience|employment(?: history)?|career|expérience(?:s)? professionnelle(?:s)?|parcours professionnel)$/i],
-        ['education', /^(?:aus-?\s*(?:und|&)\s*weiterbildung(?:en)?|ausbildung(?:en)?|schul(?:ische)?\s*(?:bildung|laufbahn)|schulen|bildung(?:sweg)?|bildungsweg|studium|weiterbildung(?:en)?|education|academic background|formation(?:s)?|diplome?|abschlüsse|qualifikationen|zertifikate|kurse)$/i],
+        ['education', /^(?:(?:berufliche[rns]?|zusätzliche[rns]?|weitere|fachliche)\s+)?(?:aus-?\s*(?:und|&|\/)\s*weiterbildung(?:en)?|ausbildung(?:en)?|schul(?:ische)?\s*(?:bildung|laufbahn)|schulen|bildung(?:sweg)?|bildungsweg|studium|weiterbildung(?:en)?|fortbildung(?:en)?|education|academic background|formation(?:s)?|diplome?|abschlüsse|qualifikationen|zertifikate|kurse)$/i],
+        // Ehrenamt, Vereine, Öffentlichkeitsarbeit: wird erfasst, aber nicht angerechnet (Häkchen bei Bedarf setzen)
+        ['volunteer', /^(?:öffentlichkeitsarbeit|ehrenamt(?:liche(?:s|r)?)?(?:\s+(?:tätigkeit(?:en)?|engagement|arbeit))?|ehrenämter|freiwilligenarbeit|freiwillige(?:s|r)?\s+(?:tätigkeit(?:en)?|engagement|arbeit)|vereins?(?:tätigkeit(?:en)?|arbeit|engagement)?|vereine|nebenämter|nebenamt(?:liche(?:s)?\s+tätigkeit(?:en)?)?|(?:soziales|gesellschaftliches|politisches)\s+engagement|engagement|ausserberufliche(?:s)?\s+(?:tätigkeit(?:en)?|engagement)|ausserschulische(?:s)?\s+(?:tätigkeit(?:en)?|engagement)|volunteer(?:ing| work)?|bénévolat)$/i],
         ['other', /^(?:sprachen|sprachkenntnisse|kenntnisse|edv(?:[- ]?kenntnisse)?|it[- ]?kenntnisse|hobbys?|hobbies|interessen|freizeit|referenzen|skills|languages|interests|references|persönliche angaben|personalien|kontakt|profil|über mich|kompetenzen)$/i]
     ];
 
@@ -112,7 +121,10 @@
         return null;
     }
 
-    const EDU_RE = /(studium|studiengang|student(?:in)?\b|gymnasium|kantonsschule|matura|maturität|bachelor|master of|master\b|diplomstudium|lehrdiplom|lehrabschluss|lehre als|lehre zum|lehre zur|ausbildung zu|ausbildung als|berufslehre|berufsschule|sekundarschule|primarschule|realschule|bezirksschule|obligatorische schule|university|universität|hochschule|fachhochschule|\bph\b|\beth\b|\bcas\b|\bdas\b|\bmas\b|weiterbildung|zertifikat|certificate|degree)/i;
+    const EDU_RE = /(studium|studiengang|student(?:in)?\b|gymnasium|kantonsschule|matura|maturität|bachelor|master of|master\b|diplomstudium|lehrdiplom|lehrabschluss|lehre als|lehre zum|lehre zur|ausbildung zu|ausbildung als|berufslehre|berufsschule|sekundarschule|primarschule|realschule|bezirksschule|obligatorische schule|university|universität|hochschule|fachhochschule|\bph\b|\beth\b|\bcas\b|\bdas\b|\bmas\b|weiterbildung|zertifikat|certificate|degree|sprachaufenthalt|sprachschule|sprachkurs|sprachdiplom)/i;
+    // Pensum-Angaben vor der Tätigkeit, z. B. «(73%) Sprachheilschule», «(Std) Skischule», «(100%) SAC Etzlihütte»
+    const PENSUM_PREFIX_RE = /^\s*\(?\s*(?:\d{1,3}\s*%|std\.?|stunden(?:lohn|weise)?|stundenweise|auf abruf|h)\s*\)\s*/i;
+    const HOURLY_RE = /\(\s*(?:std\.?|stunden(?:lohn|weise)?|auf abruf|h)\s*\)/i;
 
     // --- Standardeinstellungen ---
     // Feste Sonderkategorien (nicht löschbar), mit eigenen Regeln in den Vorlagen
@@ -187,6 +199,7 @@
             baseDelta: 1,          //   … plus so viele Klassen
             classCap: null,        //   … höchstens bis zu dieser Klasse
             fixedAnnual: null,     // fixer Jahreslohn bei 100 % statt Lohnklasse (z. B. Praktikum)
+            stageMode: 'years',    // Lohnstufe bei n vollen Dienstjahren: 'years' = Stufe n (mind. 1, Praxis Personalabteilung), 'plusOne' = Stufe n+1
             group: '',             // Abschnitt im Einreihungsplan (z. B. «Führungsebene 1»), für die Übersicht
             allowances: []         // Zulagen: [{id, label, annual (CHF/Jahr bei 100 %), autoKeywords (Ausbildung, bei der sie vorgeschlagen wird)}]
         };
@@ -210,6 +223,7 @@
         }
         if (!Array.isArray(out.classUpYears)) out.classUpYears = [12, 24];
         if (out.payments !== 12) out.payments = 13;
+        if (out.stageMode !== 'plusOne') out.stageMode = 'years';
         out.allowances = (Array.isArray(out.allowances) ? out.allowances : []).filter(a => a && a.label).map((a, i) => ({
             id: a.id || 'z' + (i + 1), label: String(a.label), annual: Math.max(0, +a.annual || 0),
             autoKeywords: Array.isArray(a.autoKeywords) ? a.autoKeywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : []
@@ -497,8 +511,10 @@
 
             const r = li.ranges[0];
             let title = cleanTitle(li.text.slice(0, r.index) + ' ' + li.text.slice(r.endIndex));
-            // Datumsreste (z. B. zweiter Zeitraum) entfernen
+            // Datumsreste (z. B. zweiter Zeitraum) und Pensum-Klammern entfernen
             title = cleanTitle(title.replace(TOKEN_RE, ' '));
+            const hourly = HOURLY_RE.test(li.text);
+            title = cleanTitle(title.replace(PENSUM_PREFIX_RE, '').replace(/\(\s*(?:\d{1,3}\s*%|std\.?|stunden(?:lohn|weise)?|h)\s*\)/ig, ' '));
             const used = new Set([i]);
 
             const isBlock = j => j < 0 || j >= info.length || !info[j].text || info[j].section || info[j].ranges.length;
@@ -522,26 +538,49 @@
             if (/praktik|internship/i.test(title)) category = '__praktikum';
             let isEdu = section === 'education';
             if (!isEdu && section !== 'experience' && !cls.titleHit && EDU_RE.test(title)) isEdu = true;
+            // Sprachaufenthalte zählen als Ausbildungszeit – auch wenn sie unter «Berufserfahrung» stehen
+            if (!isEdu && /sprachaufenthalt|sprachschule|sprachkurs|au[- ]?pair/i.test(title)) isEdu = true;
             if (isEdu) category = '__ausbildung';
+            const volunteer = section === 'volunteer';
 
             entries.push({
                 id: 'e' + Math.random().toString(36).slice(2, 9),
-                include: !isEdu,
+                include: !isEdu && !volunteer,
                 start: ym(r.start),
                 end: r.end ? ym(r.end) : '',
                 ongoing: r.ongoing,
                 title: title || '(ohne Bezeichnung)',
-                details,
+                details: [volunteer ? 'Ehrenamt / Verein – nicht angerechnet' : '', hourly ? 'im Stundenlohn – Pensum unbekannt, 100 % angenommen' : '', details].filter(Boolean).join(' · '),
                 category,
                 pensum: detectPensum(li.text + ' ' + details),
+
                 factorOverride: null,
                 raw: li.text,
                 imprecise: r.imprecise
             });
         }
         markSecondEducation(entries);
+        markHourlyDuringEducation(entries);
         return entries;
     }
+
+    /** Stundenlohn-Jobs während einer Berufsausbildung (Studium, Lehre) werden nicht angerechnet – wie in der Praxis der Personalabteilung. */
+    function markHourlyDuringEducation(entries) {
+        // Berufsausbildung: Lehre/Studium laut Titel oder eine Ausbildung von mindestens 10 Monaten nach der obligatorischen Schulzeit
+        const months = e => e.ongoing ? 999 : (ymToIndex(e.end) ?? 0) - (ymToIndex(e.start) ?? 0) + 1;
+        const edu = entries.filter(e => (e.category === '__ausbildung' || e.category === '__zweitausbildung') && e.start
+            && (VOCATIONAL_RE.test(e.title) || /\bph\b|\bphsz\b|\bphz\b|pädagogische hochschule|lehrperson|lehrdiplom|\bhf\b|\bfh\b|uni\b/i.test(e.title) || (months(e) >= 10 && !/matura|gymnasium|kantonsschule|sekundar|primar|bezirk|realschule|obligatorisch/i.test(e.title))));
+
+        for (const e of entries) {
+            if (!e.include || !/im Stundenlohn/.test(e.details) || !e.start) continue;
+            const end = e.ongoing ? '9999-12' : e.end;
+            if (edu.some(a => a.start <= end && (a.ongoing ? '9999-12' : a.end) >= e.start)) {
+                e.include = false;
+                e.details = e.details.replace('im Stundenlohn – Pensum unbekannt, 100 % angenommen', 'im Stundenlohn während der Ausbildung – nicht angerechnet');
+            }
+        }
+    }
+
 
     const VOCATIONAL_RE = /(lehre|lehrabschluss|efz|eba|studium|bachelor|master|diplom|\bhf\b|\bfh\b|höhere fachschule|fachhochschule|universität|hochschule|ausbildung (?:zur|zum|als))/i;
 
@@ -750,7 +789,8 @@
         const row = salaryTable && salaryTable.classes ? salaryTable.classes[cls] : null;
         const maxStage = row ? row.length : salaryTable && salaryTable.classes && Object.keys(salaryTable.classes).length
             ? Math.max(...Object.values(salaryTable.classes).map(r => r.length)) : 10;
-        const stage = Math.min(maxStage, y + 1);
+        // Stufe: Praxis der Personalabteilung = volle Dienstjahre (3.35 J. → Stufe 3), mindestens Stufe 1; alternativ Dienstjahre + 1
+        const stage = Math.max(1, Math.min(maxStage, tpl.stageMode === 'plusOne' ? y + 1 : y));
         const pick = m => m && m[cls] && m[cls][stage - 1] != null ? m[cls][stage - 1] : null;
         return { years: y, cls, stage, maxStage, baseCls: tpl.classMin, ups, adjustment: adj,
             salary: row && row[stage - 1] != null ? row[stage - 1] : null,

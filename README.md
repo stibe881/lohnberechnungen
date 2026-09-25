@@ -122,7 +122,15 @@ Die Excel-Vorlage «Vorlage Berechnung» (Stand 2024.06) rechnet pro Tätigkeit 
 | 6) Familienzeit | Familienarbeit | 33.33 % |
 | «Nicht mit berechnen» (x) | Häkchen «Anrechnen» entfernen | – |
 
-Unterschiede: Die App rechnet monatsgenau (die Vorlage tagesgenau), Abweichung höchstens einige Tage. Gleichzeitige Tätigkeiten summiert die Vorlage ohne Begrenzung, überzählige Zeilen streicht die Personalabteilung von Hand mit «x»; die App begrenzt die Summe pro Monat automatisch auf 100 % und kommt so auf dasselbe Ergebnis. Der Excel-Export zeigt beide Totale und vermerkt gleichzeitige Tätigkeiten in der Fussnote. Militär- und Zivildienst kommt in der Vorlage nicht vor und wird wie «ohne Verbindung» behandelt. Als Treuejahre angerechnete Zeiten (Vermerk in der Vorlage) bildet die App nicht ab.
+Weitere Regeln aus der Praxis der Personalabteilung, die die App übernimmt:
+
+- **Lohnstufe = volle Dienstjahre** (3.35 Jahre → Stufe 3, mindestens Stufe 1). Pro Funktion umstellbar auf «Dienstjahre + 1» (Einstellungen → Funktion → Lohn).
+- **Die neue Stelle zählt ab Stellenantritt bis zum Stichtag 31.12.** als Erfahrung im Zielberuf. Das Datum kommt aus der offenen Stelle oder wird bei der Person unter «Stellenantritt» eingetragen; die Zeile erscheint grün in der Stellenliste.
+- **Stundenlohn-Jobs während einer Ausbildung** (Studium, Lehre) werden nicht angerechnet; Stundenlohn-Jobs danach mit 100 % (Pensum unbekannt, änderbar). Einträge unter «Öffentlichkeitsarbeit», «Ehrenamt», «Vereine» werden erfasst, aber nicht angerechnet. Sprachaufenthalte gelten als Ausbildungszeit.
+- Pensum-Angaben vor der Tätigkeit («(73%) Sprachheilschule», «(Std) Skischule») und offene Zeiträume mit Strich («08. 2025 –») werden erkannt; «Berufliche Aus- und Weiterbildungen» und «Zusätzliche Weiterbildung» gelten als Ausbildung.
+
+Unterschiede: Die App rechnet monatsgenau (die Vorlage tagesgenau), Abweichung höchstens einige Tage.
+ Gleichzeitige Tätigkeiten summiert die Vorlage ohne Begrenzung, überzählige Zeilen streicht die Personalabteilung von Hand mit «x»; die App begrenzt die Summe pro Monat automatisch auf 100 % und kommt so auf dasselbe Ergebnis. Der Excel-Export zeigt beide Totale und vermerkt gleichzeitige Tätigkeiten in der Fussnote. Militär- und Zivildienst kommt in der Vorlage nicht vor und wird wie «ohne Verbindung» behandelt. Als Treuejahre angerechnete Zeiten (Vermerk in der Vorlage) bildet die App nicht ab.
 
 ### Lohneinreihung
 

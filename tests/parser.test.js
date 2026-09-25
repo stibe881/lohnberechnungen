@@ -131,7 +131,9 @@ assert.strictEqual(cut.exactYears, 1);
 // Lohneinreihung: 11–13, Aufstieg nach 12 und 24 Jahren
 const pl = t => P.placement(t, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), null, { classes: { 11: [1,2,3,4,5,6,7,8,9,10], 12: [11,12,13,14,15,16,17,18,19,20], 13: [21,22,23,24,25,26,27,28,29,30] } });
 assert.deepStrictEqual([pl(0).cls, pl(0).stage, pl(0).salary], [11, 1, 1]);
-assert.deepStrictEqual([pl(5.9).cls, pl(5.9).stage], [11, 6]);
+assert.deepStrictEqual([pl(5.9).cls, pl(5.9).stage], [11, 5]); // volle Dienstjahre = Stufe (Praxis Personalabteilung: 3.35 J. → Stufe 3)
+assert.strictEqual(P.placement(5.9, Object.assign({}, reglement, { classMin: 11, classMax: 13, stageMode: 'plusOne' }), null, null).stage, 6);
+assert.strictEqual(P.placement(3.35, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), { delta: -1 }, null).cls, 10);
 assert.deepStrictEqual([pl(12).cls, pl(12).stage, pl(12).salary], [12, 10, 20]);
 assert.deepStrictEqual([pl(30).cls, pl(30).stage], [13, 10]);
 assert.strictEqual(P.placement(3, Object.assign({}, reglement, { classMin: 11, classMax: 13 }), { delta: -1 }).cls, 10);
@@ -439,3 +441,44 @@ assert.strictEqual(Math.round(P.weightFor(hrE('2020-01', '2020-12', 100, '__fami
 // Zuordnung der Vorlage aus dem Regel-Schlüssel
 assert.deepStrictEqual(['education', 'internship', 'assistance', 'other', 'same', 'related', 'family', 'service'].map(k => P.hrCategory(k)), ['1)', '2a)', '2b)', '3)', '5)', '5)', '6)', '3)']);
 console.log('Berechnungsvorlage Personal (Excel) bestanden.');
+
+// Lebenslauf-Muster aus der Praxis: Pensum in Klammern vor der Tätigkeit, «(Std)», offener Zeitraum mit Strich,
+// «Berufliche Aus- und Weiterbildungen», Vereinsarbeit, Sprachaufenthalt, Stundenlohn während des Studiums
+const cvPractice = `Berufliche Erfahrungen
+11. 2025 – 07. 2026 (73%)   Sprachheilschule Musterdorf, Einführungsklasse, StV
+08. 2025 –   (12%)   Firmvorbereitung Pfarrei Musterdorf
+12. 2024 – 03. 2025 (Std)   Skischule Musterberg
+08. 2021 – 07. 2022 (100%)   Primarschule Musterdorf, 1.-3. Klasse, StV
+03. 2019 – 12. 2021 (Std)   Luftseilbahn Musterdorf
+01. 2018 – 06. 2018 (100%)   Stiftung Muster Praktikum
+08. 2017 – 12. 2017   Sprachaufenthalt Australien
+
+Berufliche Aus- und Weiterbildungen
+2018 – 2021   Kindergarten-/Unterstufen Lehrperson, PH Musterstadt
+
+Zusätzliche Weiterbildung
+2018 – 2019   Life Kinetik-Kurse
+
+Öffentlichkeitsarbeit
+2024 –   Pfarreirat Musterdorf
+2019 – 2021   Leiterteam Sommerlager Turnverein
+
+Schulbildung
+2013 – 2017   Gymnasiale Matura, Musterstadt`;
+const cvSettings = P.normalizeSettings({ categories: [{ id: 'lehrperson', name: 'Lehrperson', keywords: ['lehrperson', 'einführungsklasse', 'klasse+stv', 'sprachheilschule'] }], templates: [] });
+const pe = P.extractEntries(cvPractice, cvSettings, hrToday);
+const byTitle = t => pe.find(e => e.title.startsWith(t));
+assert.strictEqual(byTitle('Sprachheilschule').pensum, 73);
+assert.strictEqual(byTitle('Sprachheilschule').title, 'Sprachheilschule Musterdorf, Einführungsklasse, StV'); // «73%)» entfernt
+assert.strictEqual(byTitle('Sprachheilschule').category, 'lehrperson');
+assert.deepStrictEqual([byTitle('Firmvorbereitung').ongoing, byTitle('Firmvorbereitung').pensum, byTitle('Firmvorbereitung').start], [true, 12, '2025-08']); // «08. 2025 –» ohne Ende
+assert.ok(/Stundenlohn/.test(byTitle('Skischule').details) && byTitle('Skischule').include);            // Std nach der Ausbildung: 100 % angenommen
+assert.ok(!byTitle('Luftseilbahn').include && /während der Ausbildung/.test(byTitle('Luftseilbahn').details)); // Std während des Studiums: nicht angerechnet
+assert.strictEqual(byTitle('Stiftung Muster Praktikum').category, '__praktikum');
+assert.deepStrictEqual([byTitle('Sprachaufenthalt').category, byTitle('Sprachaufenthalt').include], ['__ausbildung', false]);
+assert.deepStrictEqual([byTitle('Kindergarten-/Unterstufen').category, byTitle('Kindergarten-/Unterstufen').include], ['__ausbildung', false]); // «Berufliche Aus- und Weiterbildungen» ist Ausbildung
+assert.strictEqual(byTitle('Life Kinetik').category, '__ausbildung');
+assert.ok(!byTitle('Pfarreirat').include && byTitle('Pfarreirat').ongoing && /Ehrenamt/.test(byTitle('Pfarreirat').details));
+assert.ok(!byTitle('Leiterteam').include);
+assert.strictEqual(byTitle('Gymnasiale Matura').category, '__ausbildung');
+console.log('Lebenslauf-Muster (Pensum-Klammern, offene Zeiträume, Abschnitte, Ehrenamt) bestanden.');

@@ -104,7 +104,20 @@
         if (pos.templateId && settings.templates.some(t => t.id === pos.templateId)) { c.templateId = pos.templateId; c.autoTemplate = false; c.baseTemplateId = ''; }
         c.newPensum = pos.pensum || 100;
         c.newLessons = pos.lessons ?? null;
+        if (!c.startDateEdited) c.startDate = pos.start || '';
     }
+    /**
+     * Einträge für die Berechnung: die Stellen aus dem Lebenslauf plus – wie in der Berechnungsvorlage der
+     * Personalabteilung – die neue Stelle selbst ab Stellenantritt bis zum Stichtag (zählt als Zielberuf).
+     */
+    function newJobEntry(c) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(c.startDate || '')) return null;
+        const t = tplOf(c);
+        const cutoff = P.cutoffDate(t);
+        if (c.startDate > cutoff) return null;
+        return { id: '__newjob', include: true, start: c.startDate.slice(0, 7), end: '', ongoing: true, title: 'Neue Stelle ab Stellenantritt', details: `${fmtDay(c.startDate)} bis Stichtag ${fmtDay(cutoff)}`, category: t.target, pensum: Math.round(pensumOf(c, t)), factorOverride: null, synthetic: true };
+    }
+    const entriesFor = c => { const j = newJobEntry(c); return j ? c.entries.concat(j) : c.entries; };
     const rawTplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
     /** Vorlage der Person; bei «gemäss Grundfunktion plus …» mit den Klassen der (gewählten) Grundfunktion. */
     const tplOf = c => P.effectiveTemplate(rawTplOf(c), settings.templates, c.baseTemplateId);
@@ -123,7 +136,7 @@
         if (c.suggestion) c.suggestion.alternatives = ranked.map(x => x.id).filter(id => id !== c.suggestion.id).slice(0, 3);
         if (c.autoTemplate && c.suggestion) { c.templateId = c.suggestion.id; c.baseTemplateId = ''; }
     }
-    const computeFor = c => P.compute(c.entries, tplOf(c), undefined, { birth: c.birth });
+    const computeFor = c => P.compute(entriesFor(c), tplOf(c), undefined, { birth: c.birth });
     const adjustmentOf = c => (settings.classAdjustments || []).find(a => a.id === c.adjustmentId) || null;
     /** Lohneinreihung mit der Gehaltstabelle, die für die Vorlage gilt (fest gewählt oder am Stichtag gültig). */
     function placementFor(c, r) {
@@ -212,7 +225,7 @@
     function placementWhy(t, pl) {
         if (!pl) return '';
         if (pl.fixed) return `Fixer Jahreslohn der Funktion «${t.name}», unabhängig von der Erfahrung` + (t.note ? '. ' + t.note : '');
-        let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.years + 1 > pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : ''}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
+        let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.stage >= pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : t.stageMode === 'plusOne' ? ' (Dienstjahre + 1)' : pl.years < 1 ? ' (mindestens Stufe 1)' : ''}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
         if (pl.ups) s += `, +${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} nach ${(t.classUpYears || []).slice(0, pl.ups).join(' und ')} Jahren`;
         if (pl.adjustment && pl.adjustment.delta) s += `, Korrektur: ${pl.adjustment.label}`;
         if (t.baseName) s = s.replace(`Grundklasse ${t.classMin}`, `Grundklasse ${t.classMin} (Grundfunktion «${t.baseName}» +${t.baseDelta}${t.classCap ? `, max. ${t.classCap}` : ''})`);
@@ -452,6 +465,8 @@
             templateId: defaultTemplateId === AUTO || isPosChoice(defaultTemplateId) ? settings.templates[0].id : defaultTemplateId,
             autoTemplate: defaultTemplateId === AUTO, // Funktion aus dem Lebenslauf vorschlagen
             positionId: '',
+            startDate: '',         // Stellenantritt (aus der Stelle oder von Hand); zählt bis zum Stichtag als Erfahrung
+            startDateEdited: false,
             status: 'neu',
             review: null,          // {checkedBy, checkedAt, approvedBy, approvedAt, snapshot}
             allowances: null,      // gewählte Zulagen (null = Vorschlag aus der Ausbildung)
@@ -582,7 +597,7 @@
     /** Rechenweg als HTML (Werte sind Zahlen, Texte escaped). */
     function formulaHtml(c, r, t) {
         const groups = new Map();
-        c.entries.forEach((e, i) => {
+        entriesFor(c).forEach((e, i) => {
             const pe = r.perEntry[i];
             if (!e.include || pe.factor <= 0 || pe.credited <= 0) return;
             groups.set(pe.factor, (groups.get(pe.factor) || 0) + pe.credited / (pe.factor / 100));
@@ -601,7 +616,7 @@
     }
 
     function timelineHtml(c, r) {
-        return window.CVTimeline ? CVTimeline.render({ entries: c.entries, perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth, endMonth: r.cutoffMonth }) : '';
+        return window.CVTimeline ? CVTimeline.render({ entries: entriesFor(c), perEntry: r.perEntry, catName, minAgeMonth: r.minAgeMonth, endMonth: r.cutoffMonth }) : '';
     }
 
     const overrideCount = c => c.entries.filter(e => e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '').length;
@@ -621,7 +636,8 @@
         const pl = placementFor(c, r);
         const modelName = (window.CVAi?.MODELS.find(m => m.id === c.model) || { name: c.model || 'Claude' }).name.replace(/ \(.*\)$/, '');
         return {
-            name: c.name, birth: c.birth, entries: c.entries, result: r, template: t, catName,
+            name: c.name, birth: c.birth, entries: entriesFor(c), result: r, template: t, catName,
+            startDateText: newJobEntry(c) ? `${fmtDay(c.startDate)} (zählt bis Stichtag ${fmtDay(P.cutoffDate(t))} als Erfahrung im Zielberuf)` : c.startDate ? fmtDay(c.startDate) : '',
             hinweise: c.hinweise,
             created: new Date().toLocaleDateString('de-CH'),
             sourceText: c.source === 'ki' ? `KI-gestützt mit ${modelName} (Anthropic), durch eine Person geprüft` : 'regelbasiert (ohne KI), durch eine Person geprüft',
@@ -1053,7 +1069,7 @@
     const savedJson = new Map(); // zuletzt gespeicherter Stand pro Person
     const PERSIST_FIELDS = ['id', 'name', 'autoName', 'birth', 'birthEdited', 'text', 'templateId', 'autoTemplate', 'suggestion', 'baseTemplateId',
         'adjustmentId', 'newPensum', 'newLessons', 'entries', 'source', 'model', 'hinweise', 'aiError', 'createdAt', 'hasFile', 'fileName',
-        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags'];
+        'status', 'positionId', 'review', 'allowances', 'dismissedAdj', 'aiFlags', 'startDate', 'startDateEdited'];
     const persistable = c => JSON.stringify(Object.fromEntries(PERSIST_FIELDS.map(k => [k, c[k] ?? null])));
     const storeActive = () => store.enabled && ai.storeCandidates !== false && !!ai.password;
     /** Warum nicht gespeichert wird (für den Hinweis auf der Startseite). */
@@ -1307,7 +1323,9 @@
         if (edu.length) li('Ausbildung', edu.map(([e, pe]) => `«${esc(e.title)}»${e.include && pe.factor > 0 ? ` (${pe.factor} % angerechnet)` : ' (nicht angerechnet)'}`).join(', '));
         li('Erfahrung', formulaHtml(c, r, t));
         if (pl && !pl.fixed) {
-            li('Stufe', `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.years + 1 > pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : ''}`);
+            const nj = newJobEntry(c);
+            if (nj) li('Neue Stelle', `ab ${esc(fmtDay(c.startDate))} bis Stichtag ${esc(fmtDay(P.cutoffDate(t)))} bei ${nj.pensum} % → ${fmt(r.perEntry[c.entries.length].credited / 12)} J. im Zielberuf (wie in der Berechnungsvorlage der Personalabteilung)`);
+            li('Stufe', `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.stage >= pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : t.stageMode === 'plusOne' ? ' (Dienstjahre + 1)' : pl.years < 1 ? ' (mindestens Stufe 1)' : ' (volle Dienstjahre = Stufe)'}`);
             const ups = t.classUpYears || [];
             const next = ups.find(n => pl.years < n);
             li('Lohnklasse', `Grundklasse ${t.classMin}${t.baseName ? ` (Grundfunktion «${esc(t.baseName)}» +${t.baseDelta})` : ''}${pl.ups ? `, +${pl.ups} nach ${ups.slice(0, pl.ups).join(' und ')} Jahren` : ''}${next ? ` · nächster Aufstieg nach ${next} Jahren (in ${next - pl.years} J.)` : t.classMax && t.classMax !== t.classMin && !next ? ' · höchste Klasse der Funktion erreicht' : ''}`);
@@ -1376,6 +1394,7 @@
                     <label class="field"><span>Status</span><select data-cf="status" class="status-select st-${esc(c.status || 'neu')}">${P.STATUSES.map(st => `<option value="${st.id}"${(c.status || 'neu') === st.id ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
                     <label class="field"><span>Offene Stelle</span><select data-cf="positionId"><option value="">keine</option>${(settings.positions || []).filter(p => p.status === 'offen' || p.id === c.positionId).map(p => `<option value="${esc(p.id)}"${p.id === c.positionId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</select></label>
+                    <label class="field" title="Die neue Stelle zählt ab Stellenantritt bis zum Stichtag als Erfahrung im Zielberuf (wie in der Berechnungsvorlage der Personalabteilung)"><span>Stellenantritt</span><input type="date" data-cf="startDate" value="${esc(c.startDate || '')}"></label>
                     <label class="field"><span>Funktion</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
                     ${rawTplOf(c).baseTemplateId ? `<label class="field"><span>Grundfunktion</span><select data-cf="baseTemplateId">${settings.templates.filter(x => x.id !== t.id && x.classMin && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === (c.baseTemplateId || rawTplOf(c).baseTemplateId) ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
                     ${t.classMin || t.fixedAnnual ? `${t.lessonsFull
@@ -1420,8 +1439,8 @@
                     <th title="Anrechnen">${icon('check', 'Anrechnen')}</th><th>Funktion / Stelle</th><th>Beruf</th><th>Von</th><th>Bis</th>
                     <th>Pensum</th><th class="num">Dauer</th><th title="Anrechnung pro Monat nach den Regeln der Vorlage; überschreibbar">Anrechnung</th><th class="num">Angerechnet</th><th></th>
                 </tr></thead>
-                <tbody>${rows}</tbody>
-            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>', true, `${c.entries.length} Einträge${overrideCount(c) ? `, ${overrideCount(c)} manuell` : ''}`)}
+                <tbody>${rows}${(j => j ? `<tr class="newjob" title="Wie in der Berechnungsvorlage der Personalabteilung: Die neue Stelle zählt ab Stellenantritt bis zum Stichtag. Datum oben bei «Stellenantritt» ändern oder leeren."><td>${icon('check')}</td><td class="c-title"><b>${esc(j.title)}</b><div class="details">${esc(j.details)}</div></td><td>${esc(catName(j.category))}</td><td>${esc(fmtDay(c.startDate))}</td><td>${esc(fmtDay(P.cutoffDate(t)))}</td><td>${j.pensum} %</td><td class="num">${fmtYM(r.perEntry[c.entries.length].months / 12)}</td><td><div class="factor-auto">${r.perEntry[c.entries.length].factor} % · Zielberuf</div></td><td class="num"><strong>${fmt(r.perEntry[c.entries.length].credited / 12)}</strong></td><td></td></tr>` : '')(newJobEntry(c))}</tbody>
+            </table></div>` : '<p class="empty">Keine Zeiträume erkannt. Bitte Stellen manuell hinzufügen.</p>', true, `${c.entries.length} Einträge${newJobEntry(c) ? ' + neue Stelle' : ''}${overrideCount(c) ? `, ${overrideCount(c)} manuell` : ''}`)}
             ${c.text.trim() ? section('text', 'Erkannter Text', `<pre class="rawtext-pre">${esc(c.text)}</pre>`, false) : ''}
         </div>`;
     }
@@ -1565,6 +1584,7 @@
                 : t.dataset.cf === 'newLessons' ? (t.value === '' ? null : Math.max(0.5, Math.min(lessonsFull, +t.value)))
                 : t.value;
             if (t.dataset.cf === 'name') c.autoName = false;
+            if (t.dataset.cf === 'startDate') c.startDateEdited = true;
             if (t.dataset.cf === 'templateId') { c.autoTemplate = false; c.baseTemplateId = ''; }
             if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
@@ -1678,7 +1698,7 @@
                 pl && !pl.fixed ? pl.cls : '', pl && !pl.fixed ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', n(pensumOf(c, tplOf(c))),
                 pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100) : '', pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100 / tplOf(c).payments) : '',
                 q(pl && pl.table ? pl.table.name + (pl.table.validFrom ? ' ab ' + fmtDay(pl.table.validFrom) : '') : ''), overrideCount(c), q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
-            c.entries.forEach((e, i) => {
+            entriesFor(c).forEach((e, i) => {
                 const pe = r.perEntry[i];
                 details.push([q(c.name), q(e.title), q(e.details), q(catName(e.category)), q(e.start), q(e.ongoing ? 'heute' : e.end), e.pensum,
                     q(e.include ? 'ja' : 'nein'), pe.factor, n(pe.months / 12), n(pe.credited / 12)].join(';'));
@@ -1703,10 +1723,11 @@
         const DAYS = 365.2425;
         const rows = [];
         let total = 0;
-        c.entries.forEach((e, i) => {
+        entriesFor(c).forEach((e, i) => {
             const pe = r.perEntry[i];
             if (!/^\d{4}-\d{2}$/.test(e.start) || (!e.ongoing && !/^\d{4}-\d{2}$/.test(e.end))) return;
-            const von = firstDay(e.start);
+            const von = e.synthetic ? new Date(c.startDate + 'T00:00:00') : firstDay(e.start);
+
             const bis = e.ongoing ? cutoff : lastDay(e.end);
             const days = Math.round((bis - von) / 864e5) + 1;
             const factor = e.include ? P.weightFor(e, t) : 0;
@@ -1931,6 +1952,9 @@
                     </div>
                 </div>
                 <div class="grid-4">
+                    <label class="field"><span>Lohnstufe bei n vollen Dienstjahren</span><select data-t="stageMode">
+                        <option value="years"${t.stageMode !== 'plusOne' ? ' selected' : ''}>Stufe n (3.35 J. → Stufe 3, Praxis Personal)</option>
+                        <option value="plusOne"${t.stageMode === 'plusOne' ? ' selected' : ''}>Stufe n + 1 (3.35 J. → Stufe 4)</option></select></label>
                     <label class="field"><span>Monatslohn</span><select data-t="payments">
                         <option value="13"${t.payments !== 12 ? ' selected' : ''}>13 Auszahlungen</option>
                         <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
@@ -2367,6 +2391,7 @@
             t.classUpYears = v('classUpYears').split(/[,; ]+/).map(Number).filter(n => n > 0).sort((a, b) => a - b);
             t.salaryTableId = v('salaryTableId');
             t.payments = +v('payments') === 12 ? 12 : 13;
+            t.stageMode = v('stageMode') === 'plusOne' ? 'plusOne' : 'years';
             t.lessonsFull = optNum('lessonsFull');
             t.baseTemplateId = v('baseTemplateId') === t.id ? '' : v('baseTemplateId');
             t.baseDelta = v('baseDelta') === '' ? 1 : +v('baseDelta');
