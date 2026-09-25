@@ -1067,6 +1067,7 @@
     let draftAi = null;
 
     function renderAiForm() {
+        setTimeout(updateSettingsNav);
         const models = window.CVAi ? window.CVAi.MODELS : [{ id: 'claude-opus-5', name: 'Claude Opus 5' }];
         const current = draftAi.model || (window.CVAi ? window.CVAi.DEFAULT_MODEL : 'claude-opus-5');
         $('#aiEnabled').checked = draftAi.enabled;
@@ -1198,6 +1199,8 @@
                 </div>
             </div>
         </details>`).join('');
+        filterTemplates();
+        updateSettingsNav();
     }
 
     function renderCatsForm() {
@@ -1206,6 +1209,7 @@
             <label class="field"><span>Stichwörter (durch Komma getrennt)</span><textarea rows="2" data-k="keywords">${esc(cat.keywords.join(', '))}</textarea></label>
             <button class="btn-icon" type="button" data-delcat="${esc(cat.id)}" title="Beruf löschen" aria-label="Beruf löschen">${icon('x')}</button>
         </div>`).join('');
+        updateSettingsNav();
     }
 
     const SALARY_KINDS = [{ id: 'classes', name: 'Jahreslohn' }, { id: 'lessons', name: 'pro Lektion' }, { id: 'hours', name: 'pro Stunde' }];
@@ -1256,6 +1260,7 @@
                 </div>
             </details>`;
         }).join('') : '<p class="hint">Keine Gehaltstabelle hinterlegt.</p>';
+        updateSettingsNav();
     }
 
     function renderSettingsForm(openTplId) {
@@ -1263,7 +1268,49 @@
         renderCatsForm();
         renderSalaryList();
         $('#retentionDays').value = draft.retentionDays ?? '';
+        updateSettingsNav();
     }
+
+    // --- Navigation im Einstellungsdialog ---
+    let settingsPane = 'access';
+    function showPane(id) {
+        settingsPane = id;
+        document.querySelectorAll('.set-nav-item').forEach(b => { b.classList.toggle('active', b.dataset.pane === id); b.setAttribute('aria-current', b.dataset.pane === id ? 'page' : 'false'); });
+        document.querySelectorAll('.set-pane').forEach(p => { p.hidden = p.dataset.pane !== id; });
+        $('.set-content').scrollTop = 0;
+    }
+    /** Anzahl bzw. Status neben jedem Bereich. */
+    function updateSettingsNav() {
+        if (!draft) return;
+        const dot = (ok, title) => `<span class="dot ${ok ? 'dot-ok' : 'dot-warn'}" title="${esc(title)}"></span>`;
+        const counts = {
+            access: shared.enabled && store.enabled && draftAi.password ? dot(true, 'Server verbunden') : dot(false, 'Nicht vollständig eingerichtet'),
+            ai: draftAi.enabled ? dot(draftAi.mode === 'server' ? server.configured : !!draftAi.apiKey, draftAi.enabled ? 'eingeschaltet' : '') : '<span class="off">aus</span>',
+            templates: draft.templates.length,
+            salary: draft.salaryTables.length || '<span class="off">–</span>',
+            categories: draft.categories.length,
+            data: ''
+        };
+        document.querySelectorAll('[data-count]').forEach(el => { el.innerHTML = counts[el.dataset.count] ?? ''; });
+        const n = draft.templates.length;
+        $('#tplSearch').placeholder = `${n} Funktion${n === 1 ? '' : 'en'} durchsuchen …`;
+    }
+    function filterTemplates() {
+        const terms = $('#tplSearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        document.querySelectorAll('#tplList .tpl-item').forEach(item => {
+            const text = item.querySelector('summary').textContent.toLowerCase();
+            item.hidden = !terms.every(t => text.includes(t));
+        });
+    }
+    document.querySelector('.set-nav').addEventListener('click', e => {
+        const b = e.target.closest('[data-pane]');
+        if (b) showPane(b.dataset.pane);
+    });
+    $('#settingsDialog').addEventListener('click', e => {
+        const go = e.target.closest('[data-goto]');
+        if (go) showPane(go.dataset.goto);
+    });
+    $('#tplSearch').addEventListener('input', filterTemplates);
 
     function readSettingsForm() {
         const days = $('#retentionDays').value.trim();
@@ -1395,8 +1442,11 @@
         draftAi = clone(ai);
         renderAiForm();
         renderSettingsForm(tplId);
+        $('#tplSearch').value = '';
+        $('#importResult').innerHTML = '';
+        showPane(tplId ? 'templates' : settingsPane);
         $('#settingsDialog').showModal();
-        if (tplId) document.querySelector(`#tplList [data-tpl="${CSS.escape(tplId)}"] .rules-grid`)?.scrollIntoView({ block: 'center' });
+        if (tplId) document.querySelector(`#tplList [data-tpl="${CSS.escape(tplId)}"]`)?.scrollIntoView({ block: 'start' });
         await checkStore();
         renderAiForm();
         if (window.CVAi) { server = await CVAi.checkServer(SERVER_URL); renderAiForm(); }

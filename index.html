@@ -128,74 +128,145 @@
     </dialog>
 
     <!-- Einstellungen -->
-    <dialog id="settingsDialog" class="dialog dialog-wide">
-        <form method="dialog" class="dialog-inner" id="settingsForm">
-            <h2>Einstellungen</h2>
-            <h3>Server und Zugang</h3>
-            <div class="grid-2">
-                <label class="field"><span>Zugangspasswort (für KI-Auswertung und zentrale Einstellungen)</span><input type="password" id="aiPassword" autocomplete="off"></label>
-                <label class="field" id="adminPasswordField"><span>Admin-Passwort (nur zum Speichern der zentralen Einstellungen)</span><input type="password" id="adminPassword" autocomplete="off"></label>
-            </div>
-            <label class="check"><input type="checkbox" id="sharedEnabled"> Vorlagen, Berufe und Gehaltstabellen zentral auf dem Server speichern (alle mit Zugangspasswort rechnen mit denselben Einstellungen)</label>
-            <p class="hint" id="sharedStatus"></p>
-            <label class="check"><input type="checkbox" id="storeCandidates"> Ausgewertete Personen in der Datenbank speichern (bleiben nach dem Neuladen erhalten, für alle mit Zugangspasswort sichtbar)</label>
-            <p class="hint" id="storeStatus"></p>
-            <div class="grid-4">
-                <label class="field"><span>Aufbewahrung der Bewerbenden</span><div class="suffix"><input type="number" id="retentionDays" min="0" step="1" placeholder="Server"><em>Tage</em></div></label>
-            </div>
-            <p class="hint">Personen werden so viele Tage nach der letzten Änderung samt Lebenslauf endgültig gelöscht; 0 = nie löschen, leer = Vorgabe des Servers («keep_days» in config.php). Gilt für alle, sobald die Einstellungen zentral gespeichert sind.</p>
-
-            <h3>KI-Auswertung mit Claude</h3>
-            <label class="check"><input type="checkbox" id="aiEnabled"> Lebensläufe mit Claude auswerten (erkennt auch ungewöhnliche Layouts)</label>
-            <div class="mode-row">
-                <label class="check"><input type="radio" name="aiMode" value="server"> Über euren Server (API-Schlüssel zentral hinterlegt)</label>
-                <label class="check"><input type="radio" name="aiMode" value="key"> Eigener API-Schlüssel in diesem Browser</label>
-            </div>
-            <div id="aiServerFields">
-                <p class="hint" id="serverStatus"></p>
-            </div>
-            <div id="aiKeyFields" class="grid-2">
-                <label class="field"><span>Anthropic API-Schlüssel</span><input type="password" id="aiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
-                <p class="hint">Erhältlich unter <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Wird nur in diesem Browser gespeichert und nie exportiert.</p>
-            </div>
-            <div class="grid-2">
-                <label class="field"><span>Modell</span><select id="aiModel"></select></label>
-                <label class="check"><input type="checkbox" id="aiTextOnly"> Nur Text an Claude senden (keine Fotos/Bilder aus PDFs – datensparsamer; eingescannte PDFs sind dann nicht lesbar)</label>
-            </div>
-            <p class="hint">Bei aktiver KI-Auswertung werden die Lebensläufe an Anthropic (USA) gesendet. Bewerbende müssen darüber informiert sein. Schlägt die KI-Auswertung fehl, rechnet die App automatisch mit den Regeln weiter.</p>
-
-            <h3>Aus Dokumenten erstellen</h3>
-            <p class="hint">Besoldungsreglement (mit Einreihungsplan) und Gehaltstabelle als PDF einlesen – auch beide zusammen. Die App erstellt daraus die Vorlagen (Funktionen mit Lohnklassen, «gemäss Grundfunktion», fixe Löhne), Klassenaufstieg, Stichtag und die Gehaltstabelle. Mit KI-Auswertung liest Claude das Reglement vollständig, inklusive Berufe, Stichwörter für den Vorschlag, Anrechnungsregeln und Korrekturen; ohne KI werden Funktionen und Lohnklassen übernommen und die Berufe bleiben wie bisher.</p>
-            <label class="btn btn-ghost">Dokumente einlesen (Reglement, Gehaltstabelle)<input type="file" id="importDocs" multiple accept=".pdf,.xlsx,.xls,.ods,.csv,application/pdf,text/csv" hidden></label>
-            <p class="hint" id="importResult"></p>
-
-            <h3>Vorlagen (Stellen)</h3>
-            <p class="hint">Eine Vorlage enthält die Anrechnungsregeln für eine Stelle, z. B. nach eurem Lohnreglement. Beim Hochladen wählst du oben die Vorlage aus.</p>
-            <div id="tplList" class="tpl-list"></div>
-            <button class="btn btn-ghost" type="button" id="addTpl">+ Vorlage hinzufügen</button>
-
-            <h3>Gehaltstabellen</h3>
-            <p class="hint">PDF-, Excel- oder CSV-Datei mit einer Zeile pro Lohnklasse: in der ersten Spalte die Lohnklasse (z. B. «12» oder «LK 12»), danach die Jahreslöhne für Stufe 1, 2, 3 … (bei 100 %). Überschriften werden übersprungen, Zeilen «pro Lektion» und «pro Stunde» mitgelesen, Tabellen mit Stufen als Zeilen erkannt. PDFs, die sich nicht direkt lesen lassen (z. B. eingescannte), liest Claude, falls die KI-Auswertung eingerichtet ist.<br>
-                Mehrere Tabellen sind möglich (z. B. 2026 und 2027): Jede Vorlage nimmt automatisch die Tabelle, die an ihrem Stichtag gilt, oder eine fest gewählte. Werte lassen sich in der Tabelle direkt korrigieren.</p>
-            <div id="salaryList" class="tpl-list"></div>
-            <label class="btn btn-ghost">+ Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".pdf,.xlsx,.xls,.ods,.csv,.txt,application/pdf,text/csv" hidden></label>
-
-            <h3>Berufe</h3>
-            <p class="hint">Stichwörter werden in der Funktionsbezeichnung gesucht (Gross-/Kleinschreibung egal, Wortteile genügen: «primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst und Ausbildung sind fest eingebaut.</p>
-            <div id="catList" class="cat-list"></div>
-            <button class="btn btn-ghost" type="button" id="addCat">+ Beruf hinzufügen</button>
-
-            <div class="dialog-actions spread">
-                <div class="row-gap">
-                    <button class="btn btn-ghost" type="button" id="resetSettings">Standard wiederherstellen</button>
-                    <button class="btn btn-ghost" type="button" id="exportSettings">Exportieren</button>
-                    <label class="btn btn-ghost">Importieren<input type="file" id="importSettings" accept=".json,application/json" hidden></label>
+    <dialog id="settingsDialog" class="dialog settings-dialog">
+        <form method="dialog" class="settings-shell" id="settingsForm">
+            <header class="set-head">
+                <div>
+                    <h2>Einstellungen</h2>
+                    <p class="set-sub" id="setSub">Änderungen werden erst mit «Speichern» übernommen.</p>
                 </div>
+                <button class="btn-icon set-close" value="cancel" formnovalidate title="Schliessen" aria-label="Schliessen"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+            </header>
+            <div class="set-body">
+                <nav class="set-nav" aria-label="Bereiche der Einstellungen">
+                    <button type="button" class="set-nav-item" data-pane="access"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span class="set-nav-text"><b>Zugang</b><small>Passwort, Speicherung</small></span><span class="set-nav-badge" data-count="access"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="ai"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/></svg><span class="set-nav-text"><b>KI-Auswertung</b><small>Claude</small></span><span class="set-nav-badge" data-count="ai"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="templates"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg><span class="set-nav-text"><b>Funktionen</b><small>Vorlagen & Regeln</small></span><span class="set-nav-badge" data-count="templates"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="salary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></svg><span class="set-nav-text"><b>Gehaltstabellen</b><small>Löhne je Klasse</small></span><span class="set-nav-badge" data-count="salary"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="categories"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg><span class="set-nav-text"><b>Berufe</b><small>Stichwörter</small></span><span class="set-nav-badge" data-count="categories"></span></button>
+                    <button type="button" class="set-nav-item" data-pane="data"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="set-nav-text"><b>Import & Export</b><small>Reglement, Sicherung</small></span><span class="set-nav-badge" data-count="data"></span></button>
+                </nav>
+                <div class="set-content">
+
+                    <!-- Zugang & Speicherung -->
+                    <section class="set-pane" data-pane="access">
+                        <div class="pane-head"><h3>Zugang & Speicherung</h3><p>Mit dem Zugangspasswort arbeitet dieser Browser mit eurem Server: gemeinsame Einstellungen, gespeicherte Bewerbende und KI-Auswertung.</p></div>
+                        <div class="set-card">
+                            <h4>Anmeldung</h4>
+                            <div class="grid-2">
+                                <label class="field"><span>Zugangspasswort</span><input type="password" id="aiPassword" autocomplete="off" placeholder="aus config.php «password»"></label>
+                                <label class="field" id="adminPasswordField"><span>Admin-Passwort (nur zum Speichern)</span><input type="password" id="adminPassword" autocomplete="off"></label>
+                            </div>
+                        </div>
+                        <div class="set-card">
+                            <label class="switch-row"><input type="checkbox" id="sharedEnabled" class="switch"><span><b>Einstellungen für alle speichern</b><small>Funktionen, Berufe und Gehaltstabellen liegen zentral auf dem Server – alle rechnen mit demselben Stand.</small></span></label>
+                            <p class="status-line" id="sharedStatus"></p>
+                        </div>
+                        <div class="set-card">
+                            <label class="switch-row"><input type="checkbox" id="storeCandidates" class="switch"><span><b>Bewerbende in der Datenbank speichern</b><small>Auswertungen und Lebensläufe bleiben nach dem Neuladen erhalten und sind für alle mit Zugangspasswort sichtbar.</small></span></label>
+                            <p class="status-line" id="storeStatus"></p>
+                            <div class="inline-field">
+                                <label class="field"><span>Aufbewahrung</span><div class="suffix"><input type="number" id="retentionDays" min="0" step="1" placeholder="Server"><em>Tage</em></div></label>
+                                <p class="hint">Nach so vielen Tagen ohne Änderung werden Person und Lebenslauf endgültig gelöscht. 0 = nie, leer = Vorgabe des Servers.</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- KI-Auswertung -->
+                    <section class="set-pane" data-pane="ai" hidden>
+                        <div class="pane-head"><h3>KI-Auswertung</h3><p>Claude liest Lebensläufe auch mit ungewöhnlichem Layout, schlägt die Funktion vor und liest Reglemente und Gehaltstabellen.</p></div>
+                        <div class="set-card">
+                            <label class="switch-row"><input type="checkbox" id="aiEnabled" class="switch"><span><b>Lebensläufe mit Claude auswerten</b><small>Schlägt die KI fehl, rechnet die App automatisch mit den Regeln weiter.</small></span></label>
+                        </div>
+                        <div class="set-card">
+                            <h4>Verbindung</h4>
+                            <div class="choice-row">
+                                <label class="choice"><input type="radio" name="aiMode" value="server"><span><b>Über euren Server</b><small>API-Schlüssel liegt zentral in config.php</small></span></label>
+                                <label class="choice"><input type="radio" name="aiMode" value="key"><span><b>Eigener API-Schlüssel</b><small>nur in diesem Browser gespeichert</small></span></label>
+                            </div>
+                            <div id="aiServerFields"><p class="status-line" id="serverStatus"></p></div>
+                            <div id="aiKeyFields" class="grid-2">
+                                <label class="field"><span>Anthropic API-Schlüssel</span><input type="password" id="aiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+                                <p class="hint">Erhältlich unter <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Wird nie exportiert.</p>
+                            </div>
+                        </div>
+                        <div class="set-card">
+                            <h4>Modell & Datenschutz</h4>
+                            <div class="grid-2">
+                                <label class="field"><span>Modell</span><select id="aiModel"></select></label>
+                                <div></div>
+                            </div>
+                            <label class="switch-row"><input type="checkbox" id="aiTextOnly" class="switch"><span><b>Nur Text an Claude senden</b><small>Keine Fotos oder Bilder aus PDFs – datensparsamer. Eingescannte PDFs sind dann nicht lesbar.</small></span></label>
+                            <p class="hint">Lebensläufe werden an Anthropic (USA) gesendet. Die Bewerbenden müssen darüber informiert sein.</p>
+                        </div>
+                    </section>
+
+                    <!-- Funktionen / Vorlagen -->
+                    <section class="set-pane" data-pane="templates" hidden>
+                        <div class="pane-head"><h3>Funktionen</h3><p>Jede Funktion (Vorlage) enthält die Lohnklassen und die Regeln, wie Erfahrung angerechnet wird. Mit Stichwörtern schlägt die App die passende Funktion vor.</p></div>
+                        <div class="pane-toolbar">
+                            <label class="search-field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="search" id="tplSearch" placeholder="Funktion suchen …" aria-label="Funktion suchen" autocomplete="off"></label>
+                            <button class="btn btn-ghost" type="button" data-goto="data"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 13h4"/><path d="M10 17h4"/></svg> Aus Reglement erstellen</button>
+                            <button class="btn btn-primary" type="button" id="addTpl"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Neue Funktion</button>
+                        </div>
+                        <div id="tplList" class="tpl-list"></div>
+                    </section>
+
+                    <!-- Gehaltstabellen -->
+                    <section class="set-pane" data-pane="salary" hidden>
+                        <div class="pane-head"><h3>Gehaltstabellen</h3><p>Jahreslöhne je Lohnklasse und Stufe. Jede Funktion nimmt automatisch die Tabelle, die an ihrem Stichtag gilt – so können 2026 und 2027 nebeneinander liegen.</p></div>
+                        <div class="pane-toolbar">
+                            <span class="hint">PDF, Excel oder CSV – eine Zeile pro Lohnklasse, danach die Stufen.</span>
+                            <label class="btn btn-primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg> Gehaltstabelle hochladen<input type="file" id="uploadSalary" accept=".pdf,.xlsx,.xls,.ods,.csv,.txt,application/pdf,text/csv" hidden></label>
+                        </div>
+                        <div id="salaryList" class="tpl-list"></div>
+                    </section>
+
+                    <!-- Berufe -->
+                    <section class="set-pane" data-pane="categories" hidden>
+                        <div class="pane-head"><h3>Berufe</h3><p>In diese Berufe ordnet die App jede Stelle im Lebenslauf ein. Stichwörter werden in der Funktionsbezeichnung gesucht – Wortteile genügen («primarlehr» findet «Primarlehrerin»). Familienarbeit, Militär-/Zivildienst, Praktikum, Assistenz und Ausbildung sind fest eingebaut.</p></div>
+                        <div class="pane-toolbar">
+                            <span></span>
+                            <button class="btn btn-primary" type="button" id="addCat"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Neuer Beruf</button>
+                        </div>
+                        <div id="catList" class="cat-list"></div>
+                    </section>
+
+                    <!-- Import & Export -->
+                    <section class="set-pane" data-pane="data" hidden>
+                        <div class="pane-head"><h3>Import & Export</h3><p>Funktionen und Gehaltstabellen aus euren Dokumenten erstellen, Einstellungen sichern oder weitergeben.</p></div>
+                        <div class="set-card feature-card">
+                            <div class="feature-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 13h4"/><path d="M10 17h4"/></svg></div>
+                            <div class="feature-text">
+                                <h4>Aus Reglement und Gehaltstabelle erstellen</h4>
+                                <p class="hint">Besoldungsreglement (mit Einreihungsplan) und Gehaltstabelle als PDF auswählen – auch beide zusammen. Die App erstellt Funktionen mit Lohnklassen, Aufstiege, Stichtag und die Gehaltstabelle. Mit KI-Auswertung liest Claude zusätzlich Berufe, Stichwörter und Anrechnungsregeln.</p>
+                                <label class="btn btn-primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg> Dokumente einlesen (Reglement, Gehaltstabelle)<input type="file" id="importDocs" multiple accept=".pdf,.xlsx,.xls,.ods,.csv,application/pdf,text/csv" hidden></label>
+                                <p class="status-line" id="importResult"></p>
+                            </div>
+                        </div>
+                        <div class="set-card">
+                            <h4>Einstellungsdatei</h4>
+                            <p class="hint">Funktionen, Berufe und Gehaltstabellen als JSON-Datei – ohne Passwörter und API-Schlüssel.</p>
+                            <div class="row-gap">
+                                <label class="btn btn-ghost"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg> Importieren<input type="file" id="importSettings" accept=".json,application/json" hidden></label>
+                                <button class="btn btn-ghost" type="button" id="exportSettings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg> Exportieren</button>
+                            </div>
+                        </div>
+                        <div class="set-card danger-card">
+                            <h4>Zurücksetzen</h4>
+                            <p class="hint">Setzt Funktionen und Berufe auf den Standard der App zurück. Gehaltstabellen bleiben erhalten.</p>
+                            <div><button class="btn btn-ghost btn-danger" type="button" id="resetSettings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Standard wiederherstellen</button></div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+            <footer class="set-foot">
+                <span class="hint" id="setFootHint"></span>
                 <div class="row-gap">
                     <button class="btn btn-ghost" value="cancel" formnovalidate>Abbrechen</button>
                     <button class="btn btn-primary" value="save" id="saveSettings">Speichern</button>
                 </div>
-            </div>
+            </footer>
         </form>
     </dialog>
 
