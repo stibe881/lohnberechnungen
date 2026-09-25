@@ -68,12 +68,31 @@
     const allCats = () => settings.categories.concat(P.SPECIAL_CATEGORIES);
     const catName = id => (allCats().find(c => c.id === id) || { name: '–' }).name;
     const uid = () => 'c' + Math.random().toString(36).slice(2, 9);
-    const tplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
+    const AUTO = '__auto'; // «Funktion automatisch vorschlagen»
+    const rawTplOf = c => settings.templates.find(t => t.id === c.templateId) || settings.templates[0];
+    /** Vorlage der Person; bei «gemäss Grundfunktion plus …» mit den Klassen der (gewählten) Grundfunktion. */
+    const tplOf = c => P.effectiveTemplate(rawTplOf(c), settings.templates, c.baseTemplateId);
+    /** Vorschlag der Funktion aus dem Lebenslauf (Claude oder Stichwörter der Vorlagen). */
+    function applySuggestion(c, aiRes) {
+        const ranked = P.suggestTemplates(c.entries, settings.templates);
+        const valid = id => settings.templates.some(t => t.id === id);
+        if (aiRes && aiRes.functionId && valid(aiRes.functionId)) {
+            c.suggestion = { id: aiRes.functionId, reason: aiRes.functionReason || '', source: 'ki' };
+        } else if (ranked.length) {
+            const h = ranked[0].hits;
+            c.suggestion = { id: ranked[0].id, reason: 'Treffer in ' + h.slice(0, 2).map(x => `«${x.title}»`).join(', ') + (h.length > 2 ? ` und ${h.length - 2} weiteren` : ''), source: 'regeln' };
+        } else {
+            c.suggestion = null;
+        }
+        if (c.suggestion) c.suggestion.alternatives = ranked.map(x => x.id).filter(id => id !== c.suggestion.id).slice(0, 3);
+        if (c.autoTemplate && c.suggestion) { c.templateId = c.suggestion.id; c.baseTemplateId = ''; }
+    }
     const computeFor = c => P.compute(c.entries, tplOf(c), undefined, { birth: c.birth });
     const adjustmentOf = c => (settings.classAdjustments || []).find(a => a.id === c.adjustmentId) || null;
     /** Lohneinreihung mit der Gehaltstabelle, die für die Vorlage gilt (fest gewählt oder am Stichtag gültig). */
     function placementFor(c, r) {
         const t = tplOf(c);
+        if (t.fixedAnnual) return { fixed: true, salary: +t.fixedAnnual, table: null, future: false, years: Math.floor(r.creditedYears + 1e-9) };
         const sel = P.selectSalaryTable(settings.salaryTables, t);
         const pl = P.placement(r.creditedYears, t, adjustmentOf(c), sel.table);
         return pl && Object.assign(pl, { table: sel.table, future: sel.future });
@@ -96,7 +115,7 @@
     function placementText(c, pl) {
         if (!pl) return '';
         const t = tplOf(c);
-        const parts = [`Lohnklasse ${pl.cls}, Stufe ${pl.stage}`];
+        const parts = [pl.fixed ? 'Fixer Lohn gemäss Funktion' : `Lohnklasse ${pl.cls}, Stufe ${pl.stage}`];
         if (pl.salary) {
             const p = pensumOf(c, t);
             const year = pl.salary * p / 100;
@@ -113,9 +132,12 @@
     }
     function placementWhy(t, pl) {
         if (!pl) return '';
+        if (pl.fixed) return `Fixer Jahreslohn der Funktion «${t.name}», unabhängig von der Erfahrung` + (t.note ? '. ' + t.note : '');
         let s = `${pl.years} volle Erfahrungsjahre → Stufe ${pl.stage}${pl.years + 1 > pl.maxStage ? ` (höchste Stufe ${pl.maxStage})` : ''}; Grundklasse ${t.classMin}` + (t.classMax && t.classMax !== t.classMin ? ` (Funktion ${t.classMin}–${t.classMax})` : '');
         if (pl.ups) s += `, +${pl.ups} Klasse${pl.ups > 1 ? 'n' : ''} nach ${(t.classUpYears || []).slice(0, pl.ups).join(' und ')} Jahren`;
         if (pl.adjustment && pl.adjustment.delta) s += `, Korrektur: ${pl.adjustment.label}`;
+        if (t.baseName) s = s.replace(`Grundklasse ${t.classMin}`, `Grundklasse ${t.classMin} (Grundfunktion «${t.baseName}» +${t.baseDelta}${t.classCap ? `, max. ${t.classCap}` : ''})`);
+        if (t.note) s += '. Hinweis: ' + t.note;
         if (!pl.table) return s + ' (keine Gehaltstabelle hinterlegt)';
         s += `. Gehaltstabelle ${tableLabel(pl.table)}`;
         if (pl.future) s += ' – gilt am Stichtag noch nicht, keine gültige Tabelle vorhanden';
@@ -241,11 +263,16 @@
             try {
                 if (!window.CVAi) throw new Error('KI-Modul konnte nicht geladen werden (Internetverbindung?).');
                 const res = await window.CVAi.analyze(Object.assign(
-                    { model: ai.model, categories: settings.categories, pdfBase64: c.pdfBase64, text: c.text },
+                    { model: ai.model, categories: settings.categories, pdfBase64: c.pdfBase64, text: c.text,
+                        functions: settings.templates.map(t => {
+                            const e = P.effectiveTemplate(t, settings.templates);
+                            return { id: t.id, name: t.name, classes: t.fixedAnnual ? 'fixer Lohn' : e.classMin ? `LK ${e.classMin}–${e.classMax || e.classMin}` : '', hint: [t.keywords.slice(0, 8).join(', '), t.note].filter(Boolean).join(' · ') };
+                        }) },
                     ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }
                 ));
                 c.entries = res.entries;
                 c.hinweise = res.hinweise;
+                applySuggestion(c, res);
                 if (res.name && c.autoName) { c.name = res.name; c.autoName = false; }
                 if (res.birth && !c.birthEdited) c.birth = res.birth;
                 c.source = 'ki';
@@ -256,6 +283,7 @@
             }
         }
         c.entries = P.extractEntries(c.text, settings);
+        applySuggestion(c, null);
         if (!c.birthEdited) c.birth = P.extractBirth(c.text) || c.birth || '';
         c.source = 'regeln';
     }
@@ -269,7 +297,10 @@
             birthEdited: false,
             text,
             pdfBase64: pdfBase64 || null,
-            templateId: defaultTemplateId,
+            templateId: defaultTemplateId === AUTO ? settings.templates[0].id : defaultTemplateId,
+            autoTemplate: defaultTemplateId === AUTO, // Funktion aus dem Lebenslauf vorschlagen
+            suggestion: null,
+            baseTemplateId: '',
             adjustmentId: '',
             newPensum: 100,
             entries: [],
@@ -430,6 +461,9 @@
             salaryTableText: pl && pl.table ? tableLabel(pl.table) + (pl.future ? ' (am Stichtag noch nicht gültig)' : '') + ` · Monatslohn mit ${t.payments} Auszahlungen` : '',
             settingsText: settingsSourceText(),
             overrides: overrideCount(c),
+            note: pl ? '' : t.note,
+            suggestionText: c.suggestion && c.suggestion.id === c.templateId ? 'aus dem Lebenslauf vorgeschlagen' + (c.suggestion.reason ? ': ' + c.suggestion.reason : '') + (c.suggestion.source === 'ki' ? ' (Claude)' : ' (Stichwörter)') : '',
+            baseText: t.baseName ? `Grundfunktion «${t.baseName}» +${t.baseDelta}` + (t.classCap ? `, max. LK ${t.classCap}` : '') : '',
             timeline: timelineHtml(c, r)
         };
     }
@@ -444,8 +478,8 @@
     }
 
     function render() {
-        if (!settings.templates.some(t => t.id === defaultTemplateId)) defaultTemplateId = settings.templates[0]?.id || '';
-        $('#defaultTemplate').innerHTML = tplOptions(defaultTemplateId);
+        if (defaultTemplateId !== AUTO && !settings.templates.some(t => t.id === defaultTemplateId)) defaultTemplateId = settings.templates[0]?.id || '';
+        $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>✨ Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>` + tplOptions(defaultTemplateId);
         $('#privacy').innerHTML = aiActive()
             ? `✨ KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
             : ai.enabled
@@ -466,15 +500,28 @@
             const r = computeFor(c);
             return `<tr data-select="${c.id}" class="${c.id === selectedId ? 'active' : ''}">
                 <td><strong>${esc(c.name)}</strong>${c.source === 'ki' ? ' <span class="mini-ai" title="ausgewertet mit Claude">✨</span>' : ''}${(n => n ? ` <span class="badge badge-manual" title="${n} Anrechnung${n > 1 ? 'en' : ''} manuell angepasst">✎ ${n} manuell</span>` : '')(overrideCount(c))}</td>
-                <td>${esc(tplOf(c).name)}</td>
+                <td>${esc(tplOf(c).name)}${c.autoTemplate && c.suggestion && c.suggestion.id === c.templateId ? ' <span class="mini-ai" title="aus dem Lebenslauf vorgeschlagen">vorgeschlagen</span>' : ''}</td>
                 <td class="num">${fmt(r.totalYears)}</td>
                 <td class="num">${fmt(r.targetYears)}</td>
                 <td class="num">${fmt(r.otherYears)}</td>
                 <td class="num"><strong>${fmt(r.creditedYears)}</strong></td>
-                <td class="num">${(pl => pl ? `LK ${pl.cls} / St. ${pl.stage}` : '–')(placementFor(c, r))}</td>
+                <td class="num">${(pl => pl ? pl.fixed ? 'fixer Lohn' : `LK ${pl.cls} / St. ${pl.stage}` : '–')(placementFor(c, r))}</td>
                 <td class="num"><button class="btn-icon" type="button" data-remove="${c.id}" title="Entfernen" aria-label="Entfernen">✕</button></td>
             </tr>`;
         }).join('');
+    }
+
+    /** Vorgeschlagene Funktion mit Begründung und Alternativen (anklickbar). */
+    function suggestionHtml(c) {
+        const sg = c.suggestion;
+        if (!sg) return c.autoTemplate ? '<p class="suggestion">Keine passende Funktion erkannt – bitte die Vorlage von Hand wählen. (Stichwörter für den Vorschlag stehen in den Einstellungen bei jeder Vorlage.)</p>' : '';
+        const name = id => (settings.templates.find(t => t.id === id) || { name: '–' }).name;
+        const btn = id => `<button type="button" class="link-btn" data-usetpl="${esc(id)}">${esc(name(id))}</button>`;
+        const active = sg.id === c.templateId;
+        return `<p class="suggestion">${active ? '✨ Vorgeschlagene Funktion' : '💡 Laut Lebenslauf passt eher'}: <b>${active ? esc(name(sg.id)) : btn(sg.id)}</b>`
+            + (sg.reason ? ` – ${esc(sg.reason)}` : '') + (sg.source === 'ki' ? ' (Claude)' : ' (Stichwörter)')
+            + (sg.alternatives && sg.alternatives.length ? `<br>Weitere mögliche: ${sg.alternatives.filter(id => id !== c.templateId).map(btn).join(', ')}` : '')
+            + '</p>';
     }
 
     function renderDetail() {
@@ -521,7 +568,8 @@
                 <div class="head-fields">
                     <label class="field"><span>Geburtsdatum</span><input type="month" data-cf="birth" value="${esc(c.birth)}"></label>
                     <label class="field"><span>Stelle / Vorlage</span><select data-cf="templateId">${tplOptions(t.id)}</select></label>
-                    ${t.classMin ? `${t.lessonsFull
+                    ${rawTplOf(c).baseTemplateId ? `<label class="field"><span>Grundfunktion</span><select data-cf="baseTemplateId">${settings.templates.filter(x => x.id !== t.id && x.classMin && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === (c.baseTemplateId || rawTplOf(c).baseTemplateId) ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
+                    ${t.classMin || t.fixedAnnual ? `${t.lessonsFull
                         ? `<label class="field"><span>Lektionen neue Stelle</span><div class="suffix"><input type="number" min="0.5" max="${esc(t.lessonsFull)}" step="0.5" data-cf="newLessons" value="${esc(c.newLessons ?? t.lessonsFull)}"><em>von ${esc(fmtNum(t.lessonsFull))}</em></div></label>`
                         : `<label class="field"><span>Pensum neue Stelle</span><div class="suffix"><input type="number" min="1" max="100" data-cf="newPensum" value="${esc(c.newPensum)}"><em>%</em></div></label>`}
                     <label class="field"><span>Korrektur Lohnklasse</span><select data-cf="adjustmentId"><option value="">keine</option>${(settings.classAdjustments || []).map(a => `<option value="${esc(a.id)}"${a.id === c.adjustmentId ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}
@@ -530,6 +578,7 @@
             <p class="source">${c.source === 'ki' ? '<span class="pill pill-ai">✨ ausgewertet mit Claude</span>' : '<span class="pill">ausgewertet mit Regeln</span>'}
                 ${c.aiError ? `<span class="source-error">KI-Auswertung fehlgeschlagen: ${esc(c.aiError)}</span>` : ''}
                 ${t.minAge && !c.birth ? '<span class="source-error">Geburtsdatum fehlt – Mindestalter wird nicht geprüft</span>' : ''}</p>
+            ${suggestionHtml(c)}
             ${c.hinweise ? `<div class="notice"><b>Hinweis von Claude:</b> ${esc(c.hinweise)}</div>` : ''}
             <div class="stats">
                 <div class="stat"><div class="label">Berufserfahrung total</div><div class="value">${fmt(r.totalYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.totalYears)}</div></div>
@@ -537,6 +586,7 @@
                 <div class="stat"><div class="label">andere Berufe</div><div class="value">${fmt(r.otherYears)}<span class="unit">J.</span></div><div class="extra">${fmtYM(r.otherYears)}</div></div>
                 <div class="stat primary"><div class="label">Anrechenbare Jahre</div><div class="value">${fmt(r.creditedYears)}<span class="unit">J.</span></div><div class="extra">${r.rounded || r.capped ? 'ungerundet ' + fmt(r.exactYears) + ' J.' : fmtYM(r.creditedYears)}</div></div>
             </div>
+            ${!placementFor(c, r) && t.note ? `<div class="notice"><b>Hinweis zur Einreihung:</b> ${esc(t.note)}</div>` : ''}
             ${(pl => pl ? `<div class="placement"><div class="placement-main"><span class="label">Vorschlag Lohneinreihung</span><b>${esc(placementText(c, pl))}</b></div><div class="placement-why">${esc(placementWhy(t, pl))}</div></div>` : '')(placementFor(c, r))}
             <div class="formula">${formulaHtml(c, r, t)}<div class="rules">Regeln «${esc(t.name)}»: ${esc(rulesText(t))} <button type="button" class="link-btn" data-edittpl="${esc(t.id)}">Gewichtungen anpassen</button></div></div>
             ${tl ? `<h3 class="sub-h">Zeitstrahl</h3>${tl}` : ''}
@@ -594,7 +644,12 @@
     $('#defaultTemplate').addEventListener('change', e => {
         defaultTemplateId = e.target.value;
         storageSet(TEMPLATE_KEY, defaultTemplateId);
-        candidates.forEach(c => { c.templateId = defaultTemplateId; });
+        candidates.forEach(c => {
+            c.autoTemplate = defaultTemplateId === AUTO;
+            c.baseTemplateId = '';
+            if (!c.autoTemplate) c.templateId = defaultTemplateId;
+            else if (c.suggestion) c.templateId = c.suggestion.id;
+        });
         render();
     });
 
@@ -643,6 +698,7 @@
                 : t.dataset.cf === 'newLessons' ? (t.value === '' ? null : Math.max(0.5, Math.min(lessonsFull, +t.value)))
                 : t.value;
             if (t.dataset.cf === 'name') c.autoName = false;
+            if (t.dataset.cf === 'templateId') { c.autoTemplate = false; c.baseTemplateId = ''; }
             if (t.dataset.cf === 'birth') c.birthEdited = true;
             render();
             return;
@@ -672,6 +728,8 @@
             render();
             return;
         }
+        const use = e.target.closest('[data-usetpl]');
+        if (use) { c.templateId = use.dataset.usetpl; c.baseTemplateId = ''; c.autoTemplate = false; render(); return; }
         const edit = e.target.closest('[data-edittpl]');
         if (edit) { openSettings(edit.dataset.edittpl); return; }
         const act = e.target.closest('[data-action]');
@@ -712,7 +770,7 @@
             const r = computeFor(c);
             const pl = placementFor(c, r);
             lines.push([q(c.name), q(c.birth), q(tplOf(c).name), n(r.totalYears), n(r.targetYears), n(r.otherYears), n(r.exactYears), n(r.creditedYears),
-                pl ? pl.cls : '', pl ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', n(pensumOf(c, tplOf(c))),
+                pl && !pl.fixed ? pl.cls : '', pl && !pl.fixed ? pl.stage : '', pl && pl.salary ? n(pl.salary) : '', n(pensumOf(c, tplOf(c))),
                 pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100) : '', pl && pl.salary ? n(pl.salary * pensumOf(c, tplOf(c)) / 100 / tplOf(c).payments) : '',
                 q(pl && pl.table ? pl.table.name + (pl.table.validFrom ? ' ab ' + fmtDay(pl.table.validFrom) : '') : ''), overrideCount(c), q(c.source === 'ki' ? 'Claude' : 'Regeln')].join(';'));
             c.entries.forEach((e, i) => {
@@ -811,7 +869,7 @@
         const open = new Set([...document.querySelectorAll('#tplList details[open]')].map(d => d.dataset.tpl));
         if (openId) open.add(openId);
         $('#tplList').innerHTML = draft.templates.map(t => `<details class="tpl-item" data-tpl="${esc(t.id)}" ${open.has(t.id) ? 'open' : ''}>
-            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${t.classMin ? ` · Lohnklasse ${t.classMin}${t.classMax && t.classMax !== t.classMin ? '–' + t.classMax : ''}` : ''}</span></summary>
+            <summary><span class="tpl-name">${esc(t.name)}</span><span class="tpl-target">Zielberuf: ${esc((draft.categories.concat(P.SPECIAL_CATEGORIES).find(c => c.id === t.target) || { name: '–' }).name)}${(e => e.fixedAnnual ? ` · fixer Lohn ${chf(+e.fixedAnnual)}` : e.classMin ? ` · Lohnklasse ${e.classMin}${e.classMax && e.classMax !== e.classMin ? '–' + e.classMax : ''}${e.baseName ? ' (Grundfunktion +' + e.baseDelta + ')' : ''}` : '')(P.effectiveTemplate(t, draft.templates))}${t.keywords && t.keywords.length ? ' · ✨' : ''}</span></summary>
             <div class="tpl-body">
                 <div class="grid-2">
                     <label class="field"><span>Name der Vorlage (z. B. «Primarlehrperson»)</span><input type="text" data-t="name" value="${esc(t.name)}"></label>
@@ -841,10 +899,22 @@
                         ${draft.salaryTables.map(st => `<option value="${esc(st.id)}"${st.id === t.salaryTableId ? ' selected' : ''}>${esc(st.name)}${st.validFrom ? ' ab ' + esc(fmtDay(st.validFrom)) : ''}</option>`).join('')}</select></label>
                 </div>
                 <div class="grid-4">
+                    <label class="field"><span>Gemäss Grundfunktion</span><select data-t="baseTemplateId">
+                        <option value="">nein (eigene Lohnklassen)</option>
+                        ${draft.templates.filter(x => x.id !== t.id && !x.baseTemplateId).map(x => `<option value="${esc(x.id)}"${x.id === t.baseTemplateId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+                    ${numField('plus Klassen', 'baseDelta', t.baseDelta, { unit: 'LK', placeholder: '1' })}
+                    ${numField('höchstens Klasse', 'classCap', t.classCap, { unit: 'LK', placeholder: 'keine' })}
+                    ${numField('Fixer Jahreslohn (statt Lohnklasse)', 'fixedAnnual', t.fixedAnnual, { unit: 'CHF', step: 0.05, placeholder: 'kein' })}
+                </div>
+                <div class="grid-4">
                     <label class="field"><span>Monatslohn</span><select data-t="payments">
                         <option value="13"${t.payments !== 12 ? ' selected' : ''}>13 Auszahlungen</option>
                         <option value="12"${t.payments === 12 ? ' selected' : ''}>12 Auszahlungen</option></select></label>
                     ${numField('Lektionen bei 100 % (optional)', 'lessonsFull', t.lessonsFull, { unit: 'Lekt.', step: 0.5, placeholder: 'Pensum in %' })}
+                </div>
+                <div class="grid-2">
+                    <label class="field"><span>Stichwörter für den automatischen Vorschlag (Ausbildung/Tätigkeit im Lebenslauf; «a+b» = beide im gleichen Eintrag)</span><textarea rows="2" data-t="keywords" placeholder="z. B. sozialpädagog+hf, sozialpädagog+fh">${esc((t.keywords || []).join(', '))}</textarea></label>
+                    <label class="field"><span>Hinweis zur Einreihung (erscheint beim Lohnvorschlag und im Bericht)</span><textarea rows="2" data-t="note">${esc(t.note || '')}</textarea></label>
                 </div>
                 <div class="row-gap">
                     <button class="btn btn-ghost btn-sm" type="button" data-copytpl="${esc(t.id)}">Duplizieren</button>
@@ -948,6 +1018,12 @@
             t.salaryTableId = v('salaryTableId');
             t.payments = +v('payments') === 12 ? 12 : 13;
             t.lessonsFull = optNum('lessonsFull');
+            t.baseTemplateId = v('baseTemplateId') === t.id ? '' : v('baseTemplateId');
+            t.baseDelta = v('baseDelta') === '' ? 1 : +v('baseDelta');
+            t.classCap = optNum('classCap');
+            t.fixedAnnual = optNum('fixedAnnual');
+            t.keywords = v('keywords').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+            t.note = v('note').trim();
             t.related = [...item.querySelectorAll('[data-rel]:checked')].map(x => x.dataset.rel).filter(r => r !== t.target);
         });
         document.querySelectorAll('#salaryList [data-st]').forEach(item => {
@@ -1262,6 +1338,7 @@
         const ids = new Set(allCats().map(c => c.id));
         for (const c of candidates) {
             if (!settings.templates.some(t => t.id === c.templateId)) c.templateId = settings.templates[0].id;
+            if (!c.loading) applySuggestion(c, c.suggestion && c.suggestion.source === 'ki' ? { functionId: c.suggestion.id, functionReason: c.suggestion.reason } : null);
             c.entries.forEach(e => { if (!ids.has(e.category)) e.category = '__sonstige'; });
         }
         render();

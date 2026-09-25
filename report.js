@@ -39,7 +39,7 @@
                 <div class="r-meta">Erstellt am ${esc(v.created)}</div>
             </header>
             <table class="r-facts">
-                <tr><th>Stelle / Vorlage</th><td>${esc(v.template.name)} (Zielberuf: ${esc(v.catName(v.template.target))})</td></tr>
+                <tr><th>Stelle / Vorlage</th><td>${esc(v.template.name)} (Zielberuf: ${esc(v.catName(v.template.target))}${v.baseText ? '; ' + esc(v.baseText) : ''})${v.suggestionText ? `<div class="r-sub">${esc(v.suggestionText)}</div>` : ''}</td></tr>
                 <tr><th>Geburtsdatum</th><td>${v.birth ? fmtDate(v.birth) : 'nicht angegeben'}</td></tr>
                 <tr><th>Auswertung</th><td>${esc(v.sourceText)}</td></tr>
                 ${v.salaryTableText ? `<tr><th>Gehaltstabelle</th><td>${esc(v.salaryTableText)}</td></tr>` : ''}
@@ -52,6 +52,7 @@
                 <div class="r-main"><span>Anrechenbare Jahre</span><b>${fmt(r.creditedYears)} J.</b></div>
             </div>
             ${v.placementText ? `<p class="r-placement"><b>Vorschlag Lohneinreihung:</b> ${esc(v.placementText)}<br><span>${esc(v.placementWhy)}</span></p>` : ''}
+            ${v.note ? `<p class="r-note"><b>Hinweis zur Einreihung:</b> ${esc(v.note)}</p>` : ''}
             <p class="r-formula"><b>Berechnung:</b> ${v.formulaText}</p>
             <p class="r-rules"><b>Regeln:</b> ${esc(v.rulesText)}</p>
             ${v.timeline ? `<div class="r-timeline">${v.timeline}</div>` : ''}

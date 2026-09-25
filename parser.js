@@ -100,7 +100,7 @@
 
     // --- Abschnitte ---
     const SECTION_PATTERNS = [
-        ['experience', /^(?:beruf(?:liche[rns]?)?\s*(?:erfahrung(?:en)?|werdegang|tätigkeit(?:en)?|laufbahn|praxis|stationen)|werdegang|erfahrung|arbeitserfahrung|berufspraxis|praxiserfahrung|tätigkeiten|anstellungen|work experience|professional experience|experience|employment(?: history)?|career|expérience(?:s)? professionnelle(?:s)?|parcours professionnel)$/i],
+        ['experience', /^(?:beruf(?:liche[rns]?|s)?\s*(?:erfahrung(?:en)?|werdegang|tätigkeit(?:en)?|laufbahn|praxis|stationen)|werdegang|erfahrung|arbeitserfahrung|berufspraxis|praxiserfahrung|tätigkeiten|anstellungen|work experience|professional experience|experience|employment(?: history)?|career|expérience(?:s)? professionnelle(?:s)?|parcours professionnel)$/i],
         ['education', /^(?:aus-?\s*(?:und|&)\s*weiterbildung(?:en)?|ausbildung(?:en)?|schul(?:ische)?\s*(?:bildung|laufbahn)|schulen|bildung(?:sweg)?|bildungsweg|studium|weiterbildung(?:en)?|education|academic background|formation(?:s)?|diplome?|abschlüsse|qualifikationen|zertifikate|kurse)$/i],
         ['other', /^(?:sprachen|sprachkenntnisse|kenntnisse|edv(?:[- ]?kenntnisse)?|it[- ]?kenntnisse|hobbys?|hobbies|interessen|freizeit|referenzen|skills|languages|interests|references|persönliche angaben|personalien|kontakt|profil|über mich|kompetenzen)$/i]
     ];
@@ -180,7 +180,13 @@
             classUpYears: [12, 24], // Aufstieg in die nächste Lohnklasse nach so vielen Jahren
             salaryTableId: '',     // '' = Gehaltstabelle automatisch nach Stichtag, sonst ID einer Tabelle
             payments: 13,          // Anzahl Monatslöhne pro Jahr (13 oder 12)
-            lessonsFull: null      // Lektionen pro Woche bei 100 % (optional; Pensum dann in Lektionen)
+            lessonsFull: null,     // Lektionen pro Woche bei 100 % (optional; Pensum dann in Lektionen)
+            keywords: [],          // Stichwörter für den automatischen Vorschlag der Funktion («a+b» = beide im gleichen Eintrag)
+            note: '',              // Hinweis zur Einreihung (erscheint beim Lohnvorschlag und im Bericht)
+            baseTemplateId: '',    // «gemäss Grundfunktion plus …»: Lohnklassen einer anderen Vorlage übernehmen
+            baseDelta: 1,          //   … plus so viele Klassen
+            classCap: null,        //   … höchstens bis zu dieser Klasse
+            fixedAnnual: null      // fixer Jahreslohn bei 100 % statt Lohnklasse (z. B. Praktikum)
         };
     }
 
@@ -202,6 +208,7 @@
         }
         if (!Array.isArray(out.classUpYears)) out.classUpYears = [12, 24];
         if (out.payments !== 12) out.payments = 13;
+        if (!Array.isArray(out.keywords)) out.keywords = [];
         return out;
     }
 
@@ -241,6 +248,8 @@
         out.salaryTables = tables.filter(t => t && t.classes && Object.keys(t.classes).length).map(normalizeSalaryTable);
         const tableIds = new Set(out.salaryTables.map(t => t.id));
         out.templates.forEach(t => { if (t.salaryTableId && !tableIds.has(t.salaryTableId)) t.salaryTableId = ''; });
+        const tplIds = new Set(out.templates.map(t => t.id));
+        out.templates.forEach(t => { if (t.baseTemplateId && (!tplIds.has(t.baseTemplateId) || t.baseTemplateId === t.id)) t.baseTemplateId = ''; });
         return out;
     }
 
@@ -290,6 +299,70 @@
         const valid = tables.filter(t => key(t) <= day).sort((a, b) => key(b).localeCompare(key(a)));
         if (valid.length) return { table: valid[0], future: false };
         return { table: tables.slice().sort((a, b) => key(a).localeCompare(key(b)))[0], future: true };
+    }
+
+    /**
+     * Vorlage mit den tatsächlich geltenden Lohnklassen: Bei «gemäss Grundfunktion plus 1 max. 18»
+     * kommen die Klassen aus der Grundfunktion (fest in der Vorlage oder pro Person gewählt).
+     */
+    function effectiveTemplate(tpl, templates, baseOverride) {
+        const baseId = baseOverride || tpl.baseTemplateId;
+        if (!baseId || baseId === tpl.id) return tpl;
+        let base = (templates || []).find(t => t.id === baseId);
+        if (!base) return tpl;
+        if (base.baseTemplateId && base.baseTemplateId !== tpl.id) base = effectiveTemplate(base, templates.filter(t => t.id !== tpl.id));
+        if (!base.classMin) return tpl;
+        const d = +tpl.baseDelta || 0, cap = tpl.classCap || Infinity;
+        return Object.assign({}, tpl, {
+            classMin: Math.min(cap, base.classMin + d),
+            classMax: Math.min(cap, (base.classMax || base.classMin) + d),
+            baseName: base.name,
+            baseId: base.id
+        });
+    }
+
+    /** Stichwort im Text? Kurze Stichwörter (bis 3 Zeichen, z. B. «hf», «efz») nur als ganzes Wort; «a+b» = beide. */
+    function keywordHit(text, kw) {
+        return kw.split('+').map(k => k.trim().toLowerCase()).filter(Boolean).every(k =>
+            k.length <= 3 ? new RegExp('(^|[^a-zäöüéèà0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-zäöüéèà0-9])').test(text) : text.includes(k));
+    }
+
+    /**
+     * Schlägt die passende Vorlage (Funktion) aus den Einträgen des Lebenslaufs vor.
+     * Pro Vorlage zählt je Eintrag das spezifischste Stichwort. Am stärksten zählen die aktuelle
+     * Tätigkeit und die jüngste Ausbildung (höchste Qualifikation), ältere Einträge weniger;
+     * bei Tätigkeiten zählt zusätzlich die Dauer.
+     * @returns {Array<{id, score, hits: Array<{title, keyword}>}>} absteigend sortiert, nur Treffer
+     */
+    function suggestTemplates(entries, templates) {
+        const isEdu = e => e.category === '__ausbildung' || e.category === '__zweitausbildung';
+        const endOf = e => e.ongoing ? 99999 : ymToIndex(e.end) || ymToIndex(e.start) || 0;
+        const rankIn = list => new Map(list.slice().sort((a, b) => endOf(b) - endOf(a)).map((e, i) => [e, i]));
+        const all = entries || [];
+        const eduRank = rankIn(all.filter(isEdu)), workRank = rankIn(all.filter(e => !isEdu(e)));
+        const weight = e => {
+            if (isEdu(e)) return (eduRank.get(e) === 0 ? 2 : 0.8) * 1.5;
+            const s = ymToIndex(e.start), en = e.ongoing ? null : ymToIndex(e.end);
+            const months = s !== null && en !== null ? Math.max(1, en - s + 1) : e.ongoing && s !== null ? 60 : 12;
+            const r = workRank.get(e);
+            return (r === 0 ? 2.5 : r === 1 ? 1.2 : 0.8) * (1 + Math.min(months, 120) / 60);
+        };
+        const out = [];
+        for (const t of templates || []) {
+            const kws = (t.keywords || []).filter(k => String(k).trim());
+            if (!kws.length) continue;
+            let score = 0;
+            const hits = [];
+            for (const e of all) {
+                const text = ' ' + ((e.title || '') + ' ' + (e.details || '')).toLowerCase() + ' ';
+                const best = kws.filter(k => keywordHit(text, k)).sort((a, b) => b.replace(/\+/g, '').length - a.replace(/\+/g, '').length)[0];
+                if (!best) continue;
+                score += best.replace(/\+/g, '').length * weight(e);
+                hits.push({ title: e.title, keyword: best });
+            }
+            if (score > 0) out.push({ id: t.id, score, hits });
+        }
+        return out.sort((a, b) => b.score - a.score);
     }
 
     const DEFAULT_ADJUSTMENTS = [
@@ -744,7 +817,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
+    const api = { extractEntries, extractBirth, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.CVParser = api;
 })(typeof self !== 'undefined' ? self : this);

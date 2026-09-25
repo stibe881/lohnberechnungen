@@ -241,3 +241,45 @@ assert.strictEqual(migrated.salaryTables[0].name, 'Alt');
 assert.ok(migrated.salaryTables[0].id);
 assert.strictEqual(migrated.templates[0].payments, 13);
 console.log('Gehaltstabellen (Lektionen/Prüfung/Stichtag/Stufen) bestanden.');
+
+// Grundfunktion plus 1 max. 18, Vorschlag der Funktion
+const base = rules('sozial', { id: 'sp', name: 'Sozialpädagogik', classMin: 11, classMax: 13 });
+const lead = rules('sozial', { id: 'tl', name: 'Teamleitung', baseTemplateId: 'sp', baseDelta: 1, classCap: 18 });
+const shp = rules('lehrperson', { id: 'shp', classMin: 16, classMax: 18 });
+assert.deepStrictEqual([P.effectiveTemplate(lead, [base, lead, shp]).classMin, P.effectiveTemplate(lead, [base, lead, shp]).classMax], [12, 14]);
+assert.deepStrictEqual([P.effectiveTemplate(lead, [base, lead, shp], 'shp').classMin, P.effectiveTemplate(lead, [base, lead, shp], 'shp').classMax], [17, 18]);
+assert.strictEqual(P.effectiveTemplate(base, [base]).classMin, 11);
+
+assert.ok(P.keywordHit(' sozialpädagogin hf ', 'hf'));
+assert.ok(!P.keywordHit(' hofhaus ', 'hf'));
+assert.ok(P.keywordHit(' kauffrau efz, bank ', 'kauf+efz'));
+assert.ok(!P.keywordHit(' kauffrau ', 'kauf+efz'));
+
+const tpls = [
+    rules('kaufm', { id: 'kv', keywords: ['kaufm', 'kauffrau', 'sachbearbeit'] }),
+    rules('sozial', { id: 'sp', keywords: ['sozialpädagog', 'sozialpädagog+hf'] }),
+    rules('sozial', { id: 'fabe', keywords: ['fabe', 'fachfrau betreuung', 'fachmann betreuung'] }),
+    rules('handwerk', { id: 'none' })
+];
+const cvEntries = [
+    { title: 'Kauffrau EFZ', details: 'Bank AG', start: '2008-08', end: '2011-07', category: '__ausbildung' },
+    { title: 'Sachbearbeiterin', details: 'Versicherung', start: '2011-08', end: '2015-07', category: 'kaufm' },
+    { title: 'Studium Sozialpädagogik HF', details: 'HSL Luzern', start: '2015-08', end: '2018-07', category: '__zweitausbildung' },
+    { title: 'Sozialpädagogin', details: 'Wohnheim', start: '2018-08', ongoing: true, category: 'sozial' }
+];
+const sug = P.suggestTemplates(cvEntries, tpls);
+assert.strictEqual(sug[0].id, 'sp', JSON.stringify(sug));
+assert.ok(sug.some(x => x.id === 'kv'));
+assert.ok(!sug.some(x => x.id === 'none'));
+assert.deepStrictEqual(P.suggestTemplates([], tpls), []);
+console.log('Grundfunktion und Funktionsvorschlag bestanden.');
+
+// Überschrift «Berufserfahrung» (mit Fugen-s) nach «Ausbildung»
+for (const h of ['Berufserfahrung', 'Berufstätigkeit', 'Berufspraxis', 'Berufliche Erfahrung', 'BERUFSERFAHRUNG:']) assert.strictEqual(P.detectSection(h), 'experience', h);
+const eduFirst = P.extractEntries(`Ausbildung
+2010 – 2013 Kaufmann EFZ, Gemeindeverwaltung Baar
+Berufserfahrung
+08/2013 – 12/2019 Sachbearbeiter Personal, Versicherung AG Zug
+01/2020 – heute Sachbearbeiter Verwaltung, Stiftung XY (Pensum 90%)`, S, today);
+assert.deepStrictEqual(eduFirst.map(e => e.category), ['__ausbildung', 'kaufm', 'kaufm']);
+console.log('Abschnitt «Berufserfahrung» bestanden.');

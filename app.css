@@ -314,3 +314,7 @@ details.rawtext pre { margin-top: 8px; white-space: pre-wrap; font-size: .78rem;
 .salary-table th, .salary-table td { padding: 3px 4px; }
 .salary-table input.cell { width: 92px; text-align: right; font-variant-numeric: tabular-nums; padding: 4px 6px; font-size: .82rem; }
 .badge-manual { background: var(--accent-soft); color: var(--accent); }
+
+/* Vorgeschlagene Funktion */
+.suggestion { font-size: .85rem; background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; }
+.suggestion .link-btn { font-weight: 600; }
