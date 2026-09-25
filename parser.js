@@ -384,6 +384,15 @@
             for (const raw of cat.keywords) {
                 const kw = fold(raw.toLowerCase());
                 if (!kw.trim()) continue;
+                if (kw.includes('+')) {
+                    // «a+b»: beide Teile im gleichen Eintrag, zählt wie ein langes Stichwort
+                    const len = kw.replace(/\+/g, '').length;
+                    if (!keywordHit(t + d, kw)) continue;
+                    const inTitle = keywordHit(t, kw.split('+')[0]); // Hauptteil in der Funktionsbezeichnung
+                    score = Math.max(score, len * (inTitle ? 2 : 1));
+                    if (inTitle) hitTitle = true;
+                    continue;
+                }
                 if (t.includes(kw)) { score = Math.max(score, kw.length * 2); hitTitle = true; }
                 else if (d.includes(kw)) score = Math.max(score, kw.length);
             }
@@ -881,64 +890,100 @@
 
     const slug = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30) || 'beruf';
 
+    const sectionOf = nr => String(nr || '').split('.')[0];
+    const significantWords = name => new Set(name.toLowerCase().replace(/\*(?:in|innen|r|e)\b/g, '').split(/[^a-zäöü]+/).filter(w => w.length >= 5 && !STOP_WORDS.has(w)).map(w => w.slice(0, 7)));
+
     /**
      * Baut Berufe und Vorlagen aus einem eingelesenen Reglement (von Claude oder parseRegulationText).
-     * Fehlende Angaben (z. B. Berufe ohne KI) werden aus den bisherigen Einstellungen übernommen.
+     * Jede Funktion des Einreihungsplans wird ein Beruf (Assistenz- und Praktikumsfunktionen nutzen die
+     * eingebauten Berufe «Assistenz-Einsatz» / «Praktikum») und eine Vorlage mit diesem Beruf als Zielberuf.
+     * «In Verbindung» (verwandt): von Claude angegebene Funktionsnummern, sonst Funktionen desselben
+     * Abschnitts mit gemeinsamem Wortstamm sowie die Grundfunktion.
      */
     function buildFromRegulation(reg, current) {
-        const categories = Array.isArray(reg.categories) && reg.categories.length
-            ? reg.categories.map(c => ({ id: slug(c.id || c.name), name: c.name || c.id, keywords: (c.keywords || []).map(k => String(k).toLowerCase().trim()).filter(Boolean) }))
-            : (current.categories || []).map(c => Object.assign({}, c));
-        const seen = new Set();
-        categories.forEach(c => { while (seen.has(c.id)) c.id += '_2'; seen.add(c.id); });
-        const catIds = new Set(categories.map(c => c.id));
-        const targets = new Set([...catIds, ...TARGETABLE_SPECIALS]);
-        const allCats = categories.concat(SPECIAL_CATEGORIES.filter(c => TARGETABLE_SPECIALS.includes(c.id)));
+        const fns = (reg.functions || []).filter(f => f && f.name);
+        const special = f => /assistenz/i.test(f.name) ? '__assistenz' : /praktikant|praktikum/i.test(f.name) ? '__praktikum' : null;
+        const ids = new Set(), catIds = new Set();
+        const uniq = (set, id) => { while (set.has(id)) id += '_2'; set.add(id); return id; };
+        // Ohne Stichwörter von Claude: aus dem Namen, von einer gleichnamigen bisherigen Vorlage und von
+        // bisherigen Berufen – jeder bisherige Beruf gibt seine Stichwörter genau einer Funktion weiter,
+        // deren Name am deutlichsten passt («Lehrperson» → «Fachlehrperson Zyklus 1 und 2»);
+        // Leitungsfunktionen erben nur von Leitungsberufen.
+        const heirs = new Map();
+        for (const c of current.categories || []) {
+            const kws = (c.keywords || []).map(k => fold(k.trim().toLowerCase())).filter(k => k.length >= 5 && !k.includes('+'));
+            const lead = kws.some(k => k.includes('leit'));
+            let best = null, bestLen = 0;
+            fns.forEach((f, i) => {
+                const n = fold(' ' + f.name.toLowerCase() + ' ');
+                if (!lead && /leit/.test(n)) return;
+                const len = Math.max(0, ...kws.filter(k => n.includes(k)).map(k => k.length));
+                if (len > bestLen) { bestLen = len; best = i; }
+            });
+            if (best !== null) heirs.set(best, (heirs.get(best) || []).concat(c.keywords || []));
+        }
+        const inherit = (name, i) => {
+            const same = (current.templates || []).find(t => t.name.replace(/^\d+\.\d+\s+/, '').toLowerCase() === name.toLowerCase());
+            return [...(same ? same.keywords || [] : []), ...(heirs.get(i) || [])];
+        };
+        const items = fns.map((f, i) => {
+            const kws = Array.isArray(f.keywords) && f.keywords.length ? f.keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean)
+                : [...new Set([...keywordsFromName(f.name), ...inherit(f.name, i)].map(k => k.toLowerCase().trim()).filter(Boolean))];
+            const sp = special(f);
+            return {
+                f, kws, special: sp,
+                catId: sp ? null : uniq(catIds, 'b_' + slug(f.nr || f.name)),
+                tplId: uniq(ids, 'f_' + slug(f.nr || f.name)),
+                name: (f.nr ? f.nr + ' ' : '') + f.name,
+                words: significantWords(f.name)
+            };
+        });
+        const categories = items.filter(x => x.catId).map(x => ({ id: x.catId, name: x.name, keywords: x.kws }));
+        if (!categories.length) return normalizeSettings(current);
+        const byNr = new Map(items.filter(x => x.f.nr).map(x => [String(x.f.nr), x]));
         const base = makeTemplate(categories[0].id).rules;
         const mergeRules = (...parts) => {
             const out = JSON.parse(JSON.stringify(base));
             for (const p of parts) for (const k of Object.keys(out)) if (p && p[k] && MODES.some(m => m.id === p[k].mode)) out[k] = { mode: p[k].mode, factor: +p[k].factor || 0, low: +p[k].low || 0 };
             return out;
         };
-        const ids = new Set();
-        const templates = (reg.functions || []).map(f => {
-            const name = (f.nr ? f.nr + ' ' : '') + f.name;
-            let target = targets.has(f.target) ? f.target : null;
-            if (!target) target = /assistenz/i.test(f.name) ? '__assistenz' : /praktikant|praktikum/i.test(f.name) ? '__praktikum' : classify(f.name, '', allCats).category || categories[0].id;
-            let id = 'f_' + slug(f.nr || f.name);
-            while (ids.has(id)) id += '_2';
-            ids.add(id);
-            const kws = Array.isArray(f.keywords) && f.keywords.length ? f.keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : keywordsFromName(f.name);
-            return Object.assign(makeTemplate(target, name), {
-                id,
-                related: (f.related || []).filter(r => catIds.has(r) && r !== target),
+        const withClasses = items.filter(x => x.f.classMin);
+        const templates = items.map(x => {
+            const f = x.f;
+            // Grundfunktion: über die Nummer oder die ähnlichste Funktion mit Lohnklassen
+            let baseItem = null;
+            if ((f.baseDelta != null && !f.classMin && !f.fixedAnnual) || f.baseNr) {
+                baseItem = f.baseNr && byNr.get(String(f.baseNr));
+                if (!baseItem || baseItem === x) {
+                    const best = withClasses.filter(y => y !== x).map(y => ({ y, n: [...x.words].filter(w => y.words.has(w)).length })).sort((a, b) => b.n - a.n)[0];
+                    baseItem = best && best.n > 0 ? best.y : withClasses.find(y => y !== x) || null;
+                }
+            }
+            // verwandte Berufe
+            let related;
+            if (Array.isArray(f.related) && f.related.length) {
+                related = f.related.map(n => byNr.get(String(n))).filter(Boolean).map(y => y.catId);
+            } else {
+                related = items.filter(y => y !== x && sectionOf(y.f.nr) === sectionOf(f.nr) && [...x.words].some(w => y.words.has(w))).map(y => y.catId);
+            }
+            if (baseItem) related.push(baseItem.catId);
+            const target = x.special || x.catId;
+            return Object.assign(makeTemplate(target, x.name), {
+                id: x.tplId,
+                related: [...new Set(related.filter(r => r && r !== target))],
                 rules: mergeRules(reg.defaultRules, f.rules),
                 combine: reg.combine === 'max' || reg.combine === 'sum' ? reg.combine : 'max',
                 cutoff: reg.cutoff === 'yearEnd' ? 'yearEnd' : 'today',
                 classMin: f.classMin || null, classMax: f.classMax || f.classMin || null,
-                classUpYears: Array.isArray(f.classUpYears) ? f.classUpYears : reg.classUpYears || [12, 24],
+                classUpYears: Array.isArray(reg.classUpYears) && reg.classUpYears.length ? reg.classUpYears : [12, 24],
+                baseTemplateId: baseItem ? baseItem.tplId : '',
                 baseDelta: f.baseDelta != null ? +f.baseDelta : 1, classCap: f.classCap || null,
                 fixedAnnual: f.fixedAnnual || null,
                 payments: reg.payments === 12 ? 12 : 13,
-                keywords: kws,
-                note: (f.note || '').trim(),
-                _baseNr: f.baseNr || null, _needsBase: f.baseDelta != null && !f.classMin && !f.fixedAnnual
+                keywords: x.kws,
+                note: (f.note || '').trim()
             });
         });
-        // «gemäss Grundfunktion»: Grundfunktion über die Nummer oder die ähnlichste Funktion mit Lohnklassen
-        const withClasses = templates.filter(t => t.classMin);
-        for (const t of templates) {
-            if (t._needsBase || t._baseNr) {
-                let b = t._baseNr && templates.find(x => x.name.startsWith(t._baseNr + ' ') && x !== t);
-                if (!b) {
-                    const words = t.name.toLowerCase().split(/[^a-zäöü]+/).filter(w => w.length >= 5);
-                    b = withClasses.map(x => ({ x, n: words.filter(w => x.name.toLowerCase().includes(w.slice(0, 7))).length })).sort((a, z) => z.n - a.n)[0];
-                    b = b && b.n > 0 ? b.x : withClasses[0];
-                }
-                if (b) t.baseTemplateId = b.id;
-            }
-            delete t._baseNr; delete t._needsBase;
-        }
         const classAdjustments = Array.isArray(reg.adjustments) && reg.adjustments.length
             ? reg.adjustments.filter(a => a && a.label && +a.delta).map((a, i) => ({ id: 'k' + (i + 1) + '_' + slug(a.label).slice(0, 12), label: a.label, delta: +a.delta, cap: null }))
             : (current.classAdjustments || []).slice();

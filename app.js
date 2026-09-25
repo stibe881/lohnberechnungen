@@ -502,7 +502,10 @@
     }
 
     function render() {
-        if (defaultTemplateId !== AUTO && !settings.templates.some(t => t.id === defaultTemplateId)) defaultTemplateId = settings.templates[0]?.id || '';
+        // Vorlage gibt es nicht mehr (z. B. nach dem Einlesen eines Reglements): automatisch vorschlagen, falls Stichwörter vorhanden
+        if (defaultTemplateId !== AUTO && !settings.templates.some(t => t.id === defaultTemplateId)) {
+            defaultTemplateId = settings.templates.some(t => t.keywords && t.keywords.length) ? AUTO : settings.templates[0]?.id || '';
+        }
         $('#defaultTemplate').innerHTML = `<option value="${AUTO}"${defaultTemplateId === AUTO ? ' selected' : ''}>Funktion automatisch vorschlagen (aus dem Lebenslauf)</option>` + tplOptions(defaultTemplateId);
         $('#privacy').innerHTML = aiActive()
             ? `${icon('sparkles')} KI-Auswertung mit Claude ist aktiv${ai.mode === 'server' ? ' (über euren Server)' : ''}: Lebensläufe werden an Anthropic (USA) gesendet${ai.textOnly ? ', nur als Text ohne Bilder' : ''}.`
@@ -917,7 +920,10 @@
         processSources([{ name: name || 'Eingefügter Text', text, fixedName: !!name }]);
     });
 
-    $('#exampleBtn').addEventListener('click', () => processSources([{ name: 'Beispiel Anna Muster', text: EXAMPLE }]));
+    $('#exampleBtn').addEventListener('click', () => {
+        const ex = exampleCv();
+        processSources([{ name: ex.name, text: ex.text, fixedName: true }]);
+    });
 
     /** Person entfernen; gespeicherte Personen werden nach Rückfrage auch in der Datenbank gelöscht. */
     function removeCandidate(id) {
@@ -1630,16 +1636,16 @@
                 }
                 if (!reg.functions.length) { alert(`«${f.name}»: Kein Einreihungsplan erkannt (Tabelle «Nr. | Funktion | Lohnklasse»).`); continue; }
                 const lines = [
-                    `${reg.functions.length} Funktionen` + (reg.categories && reg.categories.length ? `, ${reg.categories.length} Berufe` : ' (Berufe bleiben wie bisher)'),
+                    `${reg.functions.length} Funktionen – jede wird eine Vorlage und ein Beruf`,
                     reg.classUpYears && reg.classUpYears.length ? `Klassenaufstieg nach ${reg.classUpYears.join(' und ')} Dienstjahren` : '',
                     reg.cutoff === 'yearEnd' ? 'Stichtag 31.12.' : '',
                     reg.payments ? `${reg.payments} Monatslöhne` : '',
                     reg.adjustments && reg.adjustments.length ? `${reg.adjustments.length} Korrekturen` : ''
                 ].filter(Boolean);
                 if (!confirm(`«${f.name}» (gelesen ${source}):\n– ${lines.join('\n– ')}` + (reg.summary ? `\n\n${reg.summary}` : '')
-                    + '\n\nOK = Vorlagen' + (reg.categories && reg.categories.length ? ', Berufe' : '') + ' und Korrekturen durch diese ersetzen (Gehaltstabellen bleiben)\nAbbrechen = nichts ändern')) continue;
+                    + '\n\nOK = Vorlagen, Berufe und Korrekturen durch diese ersetzen (Gehaltstabellen bleiben)\nAbbrechen = nichts ändern')) continue;
                 draft = P.buildFromRegulation(reg, draft);
-                done.push(`Reglement «${f.name}»: ${reg.functions.length} Funktionen`);
+                done.push(`Reglement «${f.name}»: ${reg.functions.length} Funktionen und Berufe` + (source === 'ohne KI' ? ' (Stichwörter ohne KI nur grob – bitte bei den Funktionen ergänzen oder mit KI-Auswertung einlesen)' : ''));
             }
         } catch (err) {
             alert('Einlesen fehlgeschlagen: ' + err.message);
@@ -1755,6 +1761,30 @@
         }
         render();
     });
+
+    // Beispiel-Lebenslauf: bei jedem Klick eine neue (erfundene) Person
+    const EXAMPLE_FIRST = {
+        f: ['Anna', 'Laura', 'Sarah', 'Lea', 'Nina', 'Julia', 'Mirjam', 'Sandra', 'Carla', 'Elena', 'Fabienne', 'Jana', 'Selina', 'Corinne', 'Tamara', 'Noemi'],
+        m: ['Lukas', 'Marco', 'David', 'Simon', 'Jonas', 'Fabian', 'Reto', 'Michael', 'Stefan', 'Nico', 'Adrian', 'Pascal', 'Thomas', 'Samuel', 'Raphael', 'Dominik']
+    };
+    const EXAMPLE_LAST = ['Muster', 'Meier', 'Keller', 'Steiner', 'Huber', 'Brunner', 'Frei', 'Baumann', 'Gerber', 'Widmer', 'Schmid', 'Moser', 'Zimmermann', 'Bachmann', 'Iten', 'Hess', 'Kälin', 'Suter', 'Arnold', 'Odermatt'];
+    const pick = list => list[Math.floor(Math.random() * list.length)];
+    function exampleCv() {
+        const used = new Set(candidates.map(c => c.name));
+        const g = Math.random() < 0.5 ? 'f' : 'm';
+        let name = '';
+        for (let i = 0; i < 50 && (!name || used.has(name)); i++) name = pick(EXAMPLE_FIRST[g]) + ' ' + pick(EXAMPLE_LAST);
+        const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
+        const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
+        const w = (fem, masc) => g === 'f' ? fem : masc;
+        const text = EXAMPLE
+            .replace('Anna Muster', name)
+            .replace('14.05.1988', `${day}.${month}.${1986 + Math.floor(Math.random() * 5)}`)
+            .replace('Primarlehrerin', w('Primarlehrerin', 'Primarlehrer'))
+            .replace('Kaufmännische Sachbearbeiterin', w('Kaufmännische Sachbearbeiterin', 'Kaufmännischer Sachbearbeiter'))
+            .replace('Verkäuferin', w('Verkäuferin', 'Verkäufer'));
+        return { name, text };
+    }
 
     const EXAMPLE = `Anna Muster
 Bahnhofstrasse 1, 6300 Zug

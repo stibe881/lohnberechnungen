@@ -272,10 +272,9 @@ export async function readSalaryTable({ apiKey, serverUrl, password, model, pdfB
 const REGULATION_PROMPT = `Du liest ein Besoldungsreglement mit Einreihungsplan und übersetzt es in die Einstellungen einer App, die aus Lebensläufen die anrechenbare Berufserfahrung und die Lohneinreihung berechnet.
 
 Die App kennt:
-- categories: Berufsgruppen, in die jede Stelle eines Lebenslaufs eingeordnet wird (z. B. Sozialpädagogik, Betreuung, Pflege, Lehrperson, Verwaltung). id: kurz, nur a–z und _; keywords: klein geschriebene Wortstämme, die in Funktionsbezeichnungen vorkommen (Teilwort genügt, z. B. «sozialpädagog», «fabe», «kauf»). Bilde die Gruppen so, dass jede Funktion des Einreihungsplans eine passende Zielgruppe hat.
-- functions: jede Zeile des Einreihungsplans mit Lohnklasse. nr und name wie im Dokument (Name ohne lange Erläuterungen). target: id der passenden category, "__assistenz" für Assistenzfunktionen, "__praktikum" für Praktikumsfunktionen. related: ids weiterer categories, deren Erfahrung «in Verbindung mit der Funktion» steht.
+- functions: jede Zeile des Einreihungsplans mit Lohnklasse. Jede Funktion wird in der App auch ein «Beruf», in den Stellen aus Lebensläufen eingeordnet werden. nr und name wie im Dokument (Name ohne lange Erläuterungen). related: Nummern (nr) anderer Funktionen, deren Berufserfahrung «in Verbindung mit der Funktion» steht (z. B. Betreuung und Sozialpädagogik, Lehrperson und Heilpädagogik) – grosszügig, aber nicht fachfremd.
   class_min/class_max: Lohnklassen von–bis. Bei «gemäss Grundfunktion plus N max. K»: class_min/class_max null, base_delta N, class_cap K, base_nr = Nummer der naheliegendsten Grundfunktion. Bei festem Jahreslohn: fixed_annual (Franken pro Jahr), Klassen null. Funktionen, die pro Tag, nach Lehrvertrag oder Verfügung entlöhnt werden, lässt du weg.
-  keywords: Stichwörter, an denen man im Lebenslauf erkennt, dass die Person für diese Funktion in Frage kommt (Abschluss, Berufsbezeichnung), klein geschrieben; «a+b» heisst beide im gleichen Eintrag (z. B. «sozialpädagog+hf»); Wörter bis 3 Zeichen (efz, hf, fh, eba) zählen nur als ganzes Wort. Unterscheide Funktionen, die sich nur im Abschluss unterscheiden, über solche Kombinationen.
+  keywords: Stichwörter, an denen man eine Stelle oder Ausbildung im Lebenslauf dieser Funktion zuordnet (Berufsbezeichnungen, Abschlüsse, typische Tätigkeiten), klein geschriebene Wortstämme (Teilwort genügt, z. B. «sozialpädagog», «fabe», «kauf»); «a+b» heisst beide im gleichen Eintrag (z. B. «sozialpädagog+hf»); Wörter bis 3 Zeichen (efz, hf, fh, eba) zählen nur als ganzes Wort. Unterscheide Funktionen, die sich nur im Abschluss unterscheiden, über solche Kombinationen.
   note: wichtige Bedingungen zur Funktion in einem Satz (Zulagen, besondere Einstufung), sonst "".
   rules: nur wenn für diese Funktion andere Anrechnungsregeln gelten als default_rules, sonst null.
 - default_rules: Anrechnung der Erfahrung je Tätigkeitsart: same (gleiche Funktion), related (in Verbindung mit der Funktion), other (ohne Verbindung), internship (Praktikum), assistance (Assistenz-Einsatz), family (Familienarbeit), service (Militär-/Zivildienst), education (Erstausbildung), second_education (Zweitausbildung). mode: "flat" = factor % der Zeit; "pensum" = factor % vom geleisteten Pensum; "threshold" = bis 50 % Pensum low %, über 50 % Pensum factor %. Nicht geregelte Tätigkeitsarten wie «ohne Verbindung» behandeln.
@@ -299,13 +298,12 @@ const intOrNullR = { anyOf: [{ type: 'integer' }, { type: 'null' }] };
 const strArr = { type: 'array', items: { type: 'string' } };
 const REGULATION_SCHEMA = {
     type: 'object', additionalProperties: false,
-    required: ['categories', 'functions', 'default_rules', 'combine', 'cutoff', 'class_up_years', 'payments', 'adjustments', 'summary'],
+    required: ['functions', 'default_rules', 'combine', 'cutoff', 'class_up_years', 'payments', 'adjustments', 'summary'],
     properties: {
-        categories: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'name', 'keywords'], properties: { id: { type: 'string' }, name: { type: 'string' }, keywords: strArr } } },
         functions: { type: 'array', items: { type: 'object', additionalProperties: false,
-            required: ['nr', 'name', 'target', 'related', 'class_min', 'class_max', 'base_nr', 'base_delta', 'class_cap', 'fixed_annual', 'keywords', 'note', 'rules'],
+            required: ['nr', 'name', 'related', 'class_min', 'class_max', 'base_nr', 'base_delta', 'class_cap', 'fixed_annual', 'keywords', 'note', 'rules'],
             properties: {
-                nr: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' }, related: strArr,
+                nr: { type: 'string' }, name: { type: 'string' }, related: strArr,
                 class_min: intOrNullR, class_max: intOrNullR, base_nr: { anyOf: [{ type: 'string' }, { type: 'null' }] }, base_delta: intOrNullR, class_cap: intOrNullR,
                 fixed_annual: numOrNull, keywords: strArr, note: { type: 'string' }, rules: { anyOf: [RULES_SCHEMA, { type: 'null' }] }
             } } },
@@ -340,9 +338,8 @@ export async function readRegulation({ apiKey, serverUrl, password, model, pdfBa
         output_config: { effort: 'medium', format: { type: 'json_schema', schema: REGULATION_SCHEMA } }
     }, !!serverUrl, 'Das Reglement ist zu lang für eine Auswertung.');
     return {
-        categories: d.categories || [],
         functions: (d.functions || []).map(f => ({
-            nr: f.nr, name: f.name, target: f.target, related: f.related || [], classMin: f.class_min, classMax: f.class_max,
+            nr: f.nr, name: f.name, related: f.related || [], classMin: f.class_min, classMax: f.class_max,
             baseNr: f.base_nr, baseDelta: f.base_delta, classCap: f.class_cap, fixedAnnual: f.fixed_annual, keywords: f.keywords || [], note: f.note || '', rules: toAppRules(f.rules)
         })),
         defaultRules: toAppRules(d.default_rules),

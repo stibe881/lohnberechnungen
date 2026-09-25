@@ -322,7 +322,10 @@ assert.deepStrictEqual([reg.classUpYears, reg.cutoff, reg.payments], [[10, 20], 
 
 const built = P.buildFromRegulation(reg, S);
 assert.strictEqual(built.templates.length, 5);
-assert.strictEqual(built.categories.length, S.categories.length); // ohne KI: Berufe bleiben
+// Berufe = Funktionen des Einreihungsplans (Praktikum nutzt den eingebauten Beruf)
+assert.deepStrictEqual(built.categories.map(c => c.name), ['1.1 Gesamtleitung', '2.1 Fachperson Betreuung (Menschen mit Beeinträchtigung) EFZ', '2.2 Teamleitung Betreuung', '2.3 Lehrperson Primarstufe']);
+assert.strictEqual(built.templates.find(t => t.name.startsWith('2.1')).target, 'b_2_1');
+assert.ok(built.templates.find(t => t.name.startsWith('2.2')).related.includes('b_2_1'), 'Grundfunktion ist verwandt');
 const lead2 = built.templates.find(t => t.name.startsWith('2.2'));
 assert.ok(lead2.baseTemplateId, 'Grundfunktion gesetzt');
 assert.deepStrictEqual([P.effectiveTemplate(lead2, built.templates).classMin, P.effectiveTemplate(lead2, built.templates).classMax], [11, 13]);
@@ -337,6 +340,8 @@ const builtAi = P.buildFromRegulation({
     adjustments: [{ label: 'fehlende Ausbildung', delta: -1 }]
 }, S);
 assert.strictEqual(builtAi.categories.length, 1);
+assert.strictEqual(builtAi.categories[0].name, '2.1 Fachperson Betreuung');
+assert.deepStrictEqual(builtAi.categories[0].keywords, ['fabe']);
 assert.deepStrictEqual(builtAi.templates[0].rules.other, { mode: 'pensum', factor: 25, low: 0 });
 assert.strictEqual(builtAi.templates[0].rules.family.factor, 33.33);
 assert.strictEqual(builtAi.templates[0].combine, 'sum');
@@ -347,3 +352,9 @@ console.log('Reglement einlesen bestanden.');
 assert.ok(P.keywordHit(' sozialpaedagogin hf ', 'sozialpädagog+hf'));
 assert.strictEqual(P.classify('Sozialpaedagogin', '', S.categories).category, 'sozial');
 console.log('ae/oe/ue bestanden.');
+
+// Stichwörter «a+b» auch beim Einordnen der Stellen
+const cats2 = [{ id: 'fabe', name: 'FaBe', keywords: ['fabe', 'fachfrau betreuung'] }, { id: 'fabe_b', name: 'FaBe Beeinträchtigung', keywords: ['fabe+behinder', 'fachfrau betreuung+behinder'] }];
+assert.strictEqual(P.classify('Fachfrau Betreuung EFZ', 'Kita Sonnenschein', cats2).category, 'fabe');
+assert.strictEqual(P.classify('Fachfrau Betreuung EFZ', 'Wohnheim für Menschen mit Behinderung', cats2).category, 'fabe_b');
+console.log('Stichwörter a+b beim Einordnen bestanden.');

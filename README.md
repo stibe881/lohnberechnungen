@@ -19,7 +19,7 @@ Die App ist eine statische Web-App ohne Build-Schritt:
 - **Manuelle Anpassungen** (von Hand überschriebene Anrechnungen) sind in der Übersicht mit «manuell» (Stift-Symbol) markiert, im Bericht vermerkt und im CSV gezählt.
 - **Zentrale Einstellungen:** Vorlagen, Berufe und Gehaltstabellen liegen auf dem Server, alle Nutzenden rechnen mit demselben Stand (siehe «Server einrichten»).
 - **Bewerbende:** Mit Datenbank (MySQL/MariaDB) bleiben ausgewertete Personen samt Lebenslauf-Datei erhalten. Die Seite «Bewerbende» (Button oben) listet alle mit Suche, zeigt Auswertung und Lebenslauf und bei jeder Person, wie viele Tage sie noch aufbewahrt wird. Die Startseite zeigt nur die letzten 5 (siehe «Datenbank»).
-- **Aus Dokumenten erstellen:** Besoldungsreglement und Gehaltstabelle einlesen – die App erstellt daraus Vorlagen mit Lohnklassen, Aufstiegen und Stichtag; mit Claude auch Berufe, Stichwörter und Anrechnungsregeln.
+- **Aus Dokumenten erstellen:** Besoldungsreglement und Gehaltstabelle einlesen – jede Funktion des Einreihungsplans wird eine Vorlage (mit Lohnklassen, Aufstieg, Stichtag) und ein Beruf. Mit Claude kommen passende Stichwörter, verwandte Funktionen und Anrechnungsregeln dazu; ohne KI sind die Stichwörter nur grob und sollten ergänzt werden.
 - **Funktion automatisch vorschlagen:** Aus Ausbildung und Tätigkeiten im Lebenslauf schlägt die App die passende Vorlage (Funktion des Einreihungsplans) vor – mit Claude oder über Stichwörter pro Vorlage – samt Begründung und Alternativen.
 - **CSV-Export** der Übersicht und aller Stellen.
 
