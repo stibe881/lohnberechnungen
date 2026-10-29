@@ -2142,7 +2142,7 @@
             <div class="rg-head">Tätigkeit</div><div class="rg-head">Anrechnungsart</div><div class="rg-head">Anrechnung</div><div class="rg-head">bis 50 % Pensum</div>
             ${P.RULE_KEYS.map(k => {
                 const r = t.rules[k.id];
-                return `<div class="rg-name">${esc(k.name)}</div>
+                return `<div class="rg-name">${esc(k.name)} <button type="button" class="link-btn rg-all" data-ruleall="${k.id}" title="Diese Regel in alle Funktionen übernehmen">für alle</button></div>
                 <select data-r="${k.id}" data-rf="mode" aria-label="${esc(k.name)}: Anrechnungsart">${P.MODES.map(m => `<option value="${m.id}"${m.id === r.mode ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>
                 <div class="suffix"><input type="number" min="0" max="100" step="0.01" data-r="${k.id}" data-rf="factor" value="${r1(r.factor)}" aria-label="${esc(k.name)}: Anrechnung"><em>%</em></div>
                 <div class="suffix"><input type="number" min="0" max="100" step="0.01" data-r="${k.id}" data-rf="low" value="${r1(r.low)}" ${r.mode === 'threshold' ? '' : 'disabled'} aria-label="${esc(k.name)}: bis 50 % Pensum"><em>%</em></div>`;
@@ -2852,6 +2852,19 @@
         document.querySelector(`#tplList [data-tpl="${t.id}"] [data-t="name"]`)?.select();
     });
     $('#tplList').addEventListener('click', e => {
+        const all = e.target.closest('[data-ruleall]');
+        if (all) {
+            readSettingsForm();
+            const t = draft.templates.find(x => x.id === tplSel);
+            const key = all.dataset.ruleall;
+            if (!t) return;
+            const before = clone(draft.templates.map(x => x.rules[key]));
+            draft.templates.forEach(x => { x.rules[key] = Object.assign({}, t.rules[key]); });
+            markDirty();
+            const name = (P.RULE_KEYS.find(k => k.id === key) || {}).name || key;
+            undoable(`Regel «${name}» (${P.describeRule(t.rules[key])}) in alle ${draft.templates.length} Funktionen übernommen – gilt mit «Speichern».`, () => { draft.templates.forEach((x, i) => { x.rules[key] = before[i]; }); markDirty(); renderTemplatesForm(); });
+            return;
+        }
         const sel = e.target.closest('[data-selt]');
         if (sel) { readSettingsForm(); renderTemplatesForm(sel.dataset.selt); $('#tplList .fn-editor')?.scrollIntoView({ block: 'nearest' }); return; }
         const tab = e.target.closest('[data-ttab]');

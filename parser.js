@@ -575,7 +575,8 @@
                 title: title || '(ohne Bezeichnung)',
                 details: [volunteer ? 'Ehrenamt / Verein – nicht angerechnet' : '', hourly ? 'im Stundenlohn – Pensum unbekannt, 100 % angenommen' : '', details].filter(Boolean).join(' · '),
                 category,
-                pensum: detectPensum(li.text + ' ' + details),
+                // Berufsbegleitende Ausbildung: Pensum 50 (zählt bei «bis 50 %»-Regel nicht), Vollzeitstudium 100
+                pensum: isEdu && /berufsbegleitend|nebenberuflich|teilzeitstudium|in teilzeit|part[- ]time/i.test(title + ' ' + details) && !pensumStated(li.text + ' ' + details) ? 50 : detectPensum(li.text + ' ' + details),
                 pensumUnknown: !hourly && !pensumStated(li.text + ' ' + details), // kein Pensum angegeben: 100 % angenommen
 
 
