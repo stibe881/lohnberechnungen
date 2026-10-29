@@ -508,6 +508,21 @@
         today = today || new Date();
         const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim());
         const info = lines.map(l => ({ text: l, section: detectSection(l), ranges: l ? findRanges(l, today) : [] }));
+        // Ausbildungen, Diplome und Kurse mit nur einem Datum («2017 Sprachdiplom», «Juni 2019 CAS …») als eigenen Zeitraum erfassen,
+        // damit sie sichtbar sind und für Funktionsvorschlag, Zulagen und Korrekturen zählen
+        let sec = 'unknown';
+        info.forEach(li => {
+            if (li.section) { sec = li.section; return; }
+            if (li.ranges.length || !li.text) return;
+            const toks = tokenize(li.text).filter(t => !t.present);
+            if (toks.length !== 1) return;
+            const rest = li.text.slice(0, toks[0].index) + ' ' + li.text.slice(toks[0].end);
+            if (letters(rest) < 3) return;
+            if (sec === 'education' || EDU_RE.test(rest) || /diplom|zertifikat|kurs|lehrgang|ausweis|abschluss|brevet|cas\b|das\b|mas\b|weiterbildung|fortbildung|seminar/i.test(rest)) {
+                const t = toks[0];
+                li.ranges = [{ start: { y: t.y, m: t.m ?? 1, d: null }, end: { y: t.y, m: t.m ?? 12, d: null }, ongoing: false, index: t.index, endIndex: t.end, imprecise: t.m === null, single: true }];
+            }
+        });
 
         const entries = [];
         let section = 'unknown';
@@ -545,6 +560,7 @@
             if (/praktik|internship/i.test(title)) category = '__praktikum';
             let isEdu = section === 'education';
             if (!isEdu && section !== 'experience' && !cls.titleHit && EDU_RE.test(title)) isEdu = true;
+            if (!isEdu && r.single && section !== 'experience') isEdu = true; // Einzeldatum ausserhalb der Berufserfahrung: Diplom, Kurs, Zertifikat
             // Sprachaufenthalte zählen als Ausbildungszeit – auch wenn sie unter «Berufserfahrung» stehen
             if (!isEdu && /sprachaufenthalt|sprachschule|sprachkurs|au[- ]?pair/i.test(title)) isEdu = true;
             if (isEdu) category = '__ausbildung';
@@ -595,7 +611,10 @@
 
     /** Erste Lehre/erstes Studium bleibt Erstausbildung, spätere Berufsausbildungen werden Zweitausbildung. */
     function markSecondEducation(entries) {
-        const edu = entries.filter(e => e.category === '__ausbildung' && VOCATIONAL_RE.test(e.title))
+        // Nur eigentliche Berufsausbildungen (mindestens 6 Monate, keine Sprachdiplome, Kurse oder Zertifikate)
+        const CERT_RE = /sprachdiplom|sprachkurs|sprachzertifikat|zertifikat|certificate|\bkurs\b|kurse|brevet|first\b|advanced|cambridge|\bdelf\b|\bdele\b|toefl|ielts|nothilfe|samariter|\bsvf\b/i;
+        const monthsOf = e => e.ongoing ? 999 : (ymToIndex(e.end) ?? 0) - (ymToIndex(e.start) ?? 0) + 1;
+        const edu = entries.filter(e => e.category === '__ausbildung' && e.start && VOCATIONAL_RE.test(e.title) && !CERT_RE.test(e.title) && monthsOf(e) >= 6)
             .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
         const first = edu[0];
         if (!first) return;

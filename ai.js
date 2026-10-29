@@ -18,7 +18,7 @@ Erfasse jede berufliche Tätigkeit und jede Ausbildung, die einen Zeitraum hat, 
 - Übernimm die Daten so, wie sie im Lebenslauf stehen. Steht nur ein Jahr, setze den Monat auf null. Rechne nichts um.
 - Bei «heute», «aktuell», «seit …», «bis dato» o. ä. ist ongoing = true und end_year/end_month sind null.
 - start_day/end_day: der Tag, wenn er im Dokument steht («01.08.2021», «15. März 2019»), sonst null.
-- Einträge ohne erkennbaren Zeitraum lässt du weg.
+- Berufliche Tätigkeiten ohne erkennbaren Zeitraum lässt du weg. Ausbildungen, Diplome, Zertifikate, Kurse und Weiterbildungen erfasst du immer, auch mit nur einem Jahr (dann start_year = end_year = dieses Jahr) oder ganz ohne Jahr (start_year und end_year null) – sie sind für Zulagen, Korrekturen und den Funktionsvorschlag wichtig.
 - category: Wähle den Beruf aus der Liste unten anhand der tatsächlichen Tätigkeit, nicht anhand des Arbeitgebers (eine Sachbearbeiterin an einer Schule ist kaufmännisch, keine Lehrperson). Passt kein Beruf, nimm "__sonstige".
 - Schulen, Weiterbildungen, Kurse und Praktika im Rahmen einer Ausbildung erhalten category "__ausbildung".
 - Die erste Lehre bzw. das erste Studium (sowie Schulen wie Matura) erhalten "__ausbildung". Eine weitere, spätere Berufsausbildung nach abgeschlossener erster (z. B. Zweitlehre, Zweitstudium, HF/FH nach einer Lehre in anderem Beruf) erhält "__zweitausbildung".
@@ -131,7 +131,12 @@ const pad = m => String(m).padStart(2, '0');
 /** Wandelt einen Claude-Eintrag in das Eintragsformat der App um (gleiche Konventionen wie parser.js). */
 function toEntry(e, categoryIds) {
     const sy = e.start_year, sm = validMonth(e.start_month);
-    if (!Number.isInteger(sy) || sy < 1900 || sy > 2100) return null;
+    const eduCat = e.category === '__ausbildung' || e.category === '__zweitausbildung';
+    if (!Number.isInteger(sy) || sy < 1900 || sy > 2100) {
+        // Ausbildung ohne Jahr: trotzdem aufnehmen (sichtbar, zählt für Zulagen/Korrekturen), ohne Zeitraum
+        if (!eduCat || !(e.title || '').trim()) return null;
+        return { id: 'e' + Math.random().toString(36).slice(2, 9), include: false, start: '', end: '', ongoing: false, title: e.title.trim(), details: [e.employer, e.note].map(s => (s || '').trim()).filter(Boolean).join(' · '), category: e.category, pensum: 100, pensumUnknown: false, factorOverride: null, raw: '', imprecise: true };
+    }
     let ey = Number.isInteger(e.end_year) ? e.end_year : null;
     let em = validMonth(e.end_month);
     let end = '';

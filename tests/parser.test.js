@@ -531,3 +531,13 @@ assert.strictEqual(applied.unmatched.length, 1); // Diplom wird nicht zugeordnet
 const byId = P.applyReferences([{ id: 'q', title: 'Irgendwas', details: '', start: '2010-01', end: '2011-01', ongoing: false, pensum: 100, category: 'x', include: true }], [Object.assign({}, refA, { entryId: 'q' })]);
 assert.strictEqual(byId.changed.length, 1);
 console.log('Arbeitszeugnisse (Regeln) bestanden.');
+
+// Ausbildungen mit nur einem Datum (Diplome, CAS, Sprachdiplome) werden erfasst und sichtbar; Zertifikate zählen nicht als erste Berufsausbildung
+const eduCv = 'Berufserfahrung\n08.2021 – heute Lehrerin, Schule A, Vollzeit\n\nAus- und Weiterbildung\n2018 – 2021 Lehrdiplom Primarstufe, PH Musterstadt\n2014 – 2017 Kaufmännische Lehre, Bank X\nJuni 2023 CAS Schulische Heilpädagogik, HfH\n2017 Englisch Sprachdiplom (Advanced / C1)\n';
+const eduEntries = P.extractEntries(eduCv, P.DEFAULT_SETTINGS, hrToday);
+const byT = t => eduEntries.find(e => e.title.startsWith(t));
+assert.deepStrictEqual([byT('CAS').start, byT('CAS').end, byT('CAS').category, byT('CAS').include], ['2023-06', '2023-06', '__ausbildung', false]);
+assert.deepStrictEqual([byT('Englisch').start, byT('Englisch').end, byT('Englisch').imprecise], ['2017-01', '2017-12', true]);
+assert.strictEqual(byT('Kaufmännische').category, '__ausbildung');
+assert.strictEqual(byT('Lehrdiplom').category, '__zweitausbildung'); // spätere Berufsausbildung, nicht das Sprachdiplom
+console.log('Ausbildungen mit Einzeldatum bestanden.');
