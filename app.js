@@ -1606,7 +1606,11 @@
         const t = tplOf(c);
         const r = computeFor(c);
 
-        const rows = c.entries.map((e, i) => {
+        // Chronologisch (neueste zuerst), auch für von Hand ergänzte Zeilen; Zeilen ohne Datum zuunterst
+        const key = e => { const d = P.dateStart(e.start); return d === null ? -Infinity : d; };
+        const order = c.entries.map((e, i) => i).sort((a, b) => key(c.entries[b]) - key(c.entries[a]) || ((P.dateEnd(c.entries[b].end) ?? Infinity) - (P.dateEnd(c.entries[a].end) ?? Infinity)));
+        const rows = order.map(i => {
+            const e = c.entries[i];
             const pe = r.perEntry[i];
             const auto = e.factorOverride === null || e.factorOverride === undefined || e.factorOverride === '';
             return `<tr class="${e.include ? '' : 'excluded'}" data-id="${e.id}">
