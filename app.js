@@ -1619,6 +1619,7 @@
                 <td class="c-title">
                     <input type="text" data-f="title" value="${esc(e.title)}" aria-label="Funktion">
                     ${e.details ? `<div class="details" title="${esc(e.details)}">${esc(e.details)}</div>` : ''}
+                    ${e.manual ? '<span class="badge badge-manual" title="Von Hand erfasst – bleibt bei «Neu auswerten» erhalten">von Hand</span>' : ''}
                     ${e.verified ? `<span class="badge badge-ok" title="Belegt durch ${esc(DOC_KINDS[e.verified.kind] || 'Dokument')} «${esc(e.verified.file)}»${(e.verified.fields || []).length ? ' – übernommen: ' + esc(e.verified.fields.join(', ')) : ''}${e.verified.note ? ' – ' + esc(e.verified.note) : ''}">${icon('check')} belegt</span>` : ''}
                 </td>
                 <td class="c-cat"><select data-f="category" aria-label="Beruf">${catOptions(e.category, true)}</select></td>
@@ -1914,7 +1915,7 @@
         if (act.dataset.action === 'add') {
             c.entries.push({
                 id: 'e' + Math.random().toString(36).slice(2, 9), include: true, start: '', end: '', ongoing: false,
-                title: '', details: '', category: tplOf(c).target, pensum: 100, factorOverride: null, raw: '', imprecise: false
+                title: '', details: '', category: tplOf(c).target, pensum: 100, factorOverride: null, raw: '', imprecise: false, manual: true
             });
             render();
             const inputs = detail.querySelectorAll('input[data-f="title"]');
@@ -1940,15 +1941,21 @@
                 if (useAi && !c.pdfBase64 && !c.text.trim()) useAi = false; // nichts zum Senden vorhanden
                 if (c.scannedPages) c.scannedPages.sentToAi = !!(useAi && c.pdfBase64);
                 setStatus(useAi ? 'Claude wertet ' + c.name + ' neu aus …' : '');
+                // Von Hand erfasste Stellen bleiben erhalten; Belege aus Zeugnissen werden danach wieder angewendet
+                const manual = c.entries.filter(e => e.manual);
+                const docs = (c.docs || []).filter(d => d.kind !== 'diplom' && (d.start || d.end));
                 c.loading = true;
                 render();
                 await analyzeCandidate(c, useAi);
+                c.entries.push(...manual.filter(m => !c.entries.some(e => e.id === m.id)));
+                if (docs.length) P.applyReferences(c.entries, docs.map(d => Object.assign({}, d, { entryId: null })));
                 c.loading = false;
                 c.step = '';
                 $('#status').textContent = '';
                 if (c.aiError) toast('KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet', 'warn');
                 render();
-                undoable(`${c.name} neu ausgewertet${overrideCount({ entries: before.entries }) ? ' – manuelle Anpassungen ersetzt' : ''}.`, () => { Object.assign(c, clone(before)); render(); });
+                const edited = before.entries.filter(e => !e.manual && (e.factorOverride !== null && e.factorOverride !== undefined && e.factorOverride !== '')).length;
+                undoable(`${c.name} neu ausgewertet${manual.length ? ` – ${manual.length} von Hand erfasste Stelle${manual.length > 1 ? 'n' : ''} behalten` : ''}${edited ? ' – manuelle Anrechnungen ersetzt' : ''}.`, () => { Object.assign(c, clone(before)); render(); });
             }, `Neu auswerten von ${c.name}`);
         }
     });
