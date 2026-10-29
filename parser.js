@@ -480,14 +480,19 @@
         return { category: best, titleHit };
     }
 
+    // Pensum-Angaben: «80 %», «80%», «80 Prozent», «Pensum 80», «Pensum: 100», «Vollzeit» (= 100), «100%-Stelle»
+    const PENSUM_STATED_RE = /(\d{1,3})\s*(?:-\s*\d{1,3}\s*)?(?:%|prozent|stellenprozent)|(?:pensum|beschäftigungsgrad|anstellungsgrad|arbeitspensum|stellenprozente?)\s*(?:von|:)?\s*(\d{1,3})\b|\b(vollzeit|full[- ]?time|100\s*%)/i;
     function detectPensum(text) {
-        const m = text.match(/(?:pensum|anstellung|teilzeit|beschäftigungsgrad|arbeitspensum)?\s*(\d{1,3})\s*(?:-\s*\d{1,3}\s*)?%/i);
+        const m = PENSUM_STATED_RE.exec(text || '');
         if (m) {
-            const v = +m[1];
+            if (m[3]) return 100;
+            const v = +(m[1] || m[2]);
             if (v >= 5 && v <= 100) return v;
         }
         return 100;
     }
+    /** Steht im Text eine Pensum-Angabe (auch «Vollzeit»)? */
+    const pensumStated = text => PENSUM_STATED_RE.test(text || '');
 
     function cleanTitle(s) {
         return s.replace(/^[\s:|,;•·\-–—/()]+|[\s:|,;•·\-–—/(]+$/g, '').replace(/\s{2,}/g, ' ').trim();
@@ -555,7 +560,7 @@
                 details: [volunteer ? 'Ehrenamt / Verein – nicht angerechnet' : '', hourly ? 'im Stundenlohn – Pensum unbekannt, 100 % angenommen' : '', details].filter(Boolean).join(' · '),
                 category,
                 pensum: detectPensum(li.text + ' ' + details),
-                pensumUnknown: !hourly && !/\d{1,3}\s*%/.test(li.text + ' ' + details), // kein Pensum angegeben: 100 % angenommen
+                pensumUnknown: !hourly && !pensumStated(li.text + ' ' + details), // kein Pensum angegeben: 100 % angenommen
 
 
                 factorOverride: null,
