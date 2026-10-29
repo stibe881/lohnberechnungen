@@ -1606,9 +1606,10 @@
         const t = tplOf(c);
         const r = computeFor(c);
 
-        // Chronologisch (neueste zuerst), auch für von Hand ergänzte Zeilen; Zeilen ohne Datum zuunterst
-        const key = e => { const d = P.dateStart(e.start); return d === null ? -Infinity : d; };
-        const order = c.entries.map((e, i) => i).sort((a, b) => key(c.entries[b]) - key(c.entries[a]) || ((P.dateEnd(c.entries[b].end) ?? Infinity) - (P.dateEnd(c.entries[a].end) ?? Infinity)));
+        // Neueste zuoberst: laufende Stellen («bis heute») zuerst, dann nach Enddatum, bei gleichem Ende nach Beginn; Zeilen ohne Datum zuunterst
+        const endKey = e => { if (P.dateStart(e.start) === null) return -Infinity; if (e.ongoing) return Infinity; const d = P.dateEnd(e.end); return d === null ? P.dateStart(e.start) : d; };
+        const startKey = e => P.dateStart(e.start) ?? -Infinity;
+        const order = c.entries.map((e, i) => i).sort((a, b) => (endKey(c.entries[b]) - endKey(c.entries[a])) || (startKey(c.entries[b]) - startKey(c.entries[a])));
         const rows = order.map(i => {
             const e = c.entries[i];
             const pe = r.perEntry[i];
