@@ -1629,7 +1629,7 @@
                     <label class="ongoing"><input type="checkbox" data-f="ongoing" ${e.ongoing ? 'checked' : ''}> bis heute</label>
                 </td>
                 <td class="c-small"><div class="suffix"><input type="number" min="0" max="100" data-f="pensum" value="${esc(e.pensum)}" aria-label="Pensum"><em>%</em></div>${e.pensumUnknown && e.include && e.category !== '__ausbildung' && e.category !== '__familie' ? '<span class="badge" title="Im Lebenslauf steht kein Pensum – 100 % angenommen. Bis 50 % zählt meist nur die Hälfte, bitte prüfen.">Pensum?</span>' : ''}</td>
-                <td class="num">${pe.valid ? fmtYM(pe.months / 12) : '<span class="badge">Datum?</span>'}${e.imprecise ? '<span class="badge" title="Nur Jahreszahl angegeben – bitte Monate prüfen">ungenau</span>' : ''}</td>
+                <td class="num">${pe.valid ? fmtYM(pe.months / 12) : '<span class="badge">Datum?</span>'}${e.imprecise ? `<button type="button" class="badge badge-btn" data-precise="${e.id}" title="Im Lebenslauf steht nur die Jahreszahl – Daten prüfen. Klicken, wenn die Daten stimmen.">ungenau</button>` : ''}</td>
                 <td class="c-small">
                     <div class="suffix"><input type="number" min="0" max="100" data-f="factorOverride" value="${auto ? '' : esc(e.factorOverride)}" placeholder="${pe.factor}" aria-label="Faktor"><em>%</em></div>
                     ${auto ? `<div class="factor-auto" title="${esc(P.describeRule(t.rules[pe.ruleKey]))}">${esc((P.RULE_KEYS.find(k => k.id === pe.ruleKey) || {}).name || 'automatisch')}</div>`
@@ -1875,14 +1875,16 @@
         if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).rules.education.factor > 0;
         render();
     });
-    // Pensum-Feld bearbeitet (auch wenn derselbe Wert bestätigt wird): Markierung «Pensum?» entfernen
+    // Pensum- oder Datumsfeld bearbeitet (auch wenn derselbe Wert bestätigt wird): Markierungen «Pensum?» bzw. «ungenau» entfernen
     detail.addEventListener('focusout', e => {
         const t = e.target;
-        if (!t.matches || !t.matches('input[data-f="pensum"]')) return;
+        if (!t.matches || !t.matches('input[data-f="pensum"], input[data-f="start"], input[data-f="end"]')) return;
         const c = candidates.find(x => x.id === selectedId);
         const row = t.closest('tr[data-id]');
         const entry = c && row && c.entries.find(x => x.id === row.dataset.id);
-        if (entry && entry.pensumUnknown && t.value.trim() !== '') { entry.pensumUnknown = false; render(); }
+        if (!entry || t.value.trim() === '') return;
+        if (t.dataset.f === 'pensum' && entry.pensumUnknown) { entry.pensumUnknown = false; render(); }
+        if ((t.dataset.f === 'start' || t.dataset.f === 'end') && entry.imprecise) { entry.imprecise = false; render(); }
     });
     detail.addEventListener('click', e => {
         const c = candidates.find(x => x.id === selectedId);
@@ -1896,6 +1898,8 @@
         const dup = e.target.closest('[data-opendup]');
         if (dup) { selectedId = dup.dataset.opendup; cvShownId = null; render(); return; }
         if (e.target.closest('[data-pensumok]')) { c.entries.forEach(x => { x.pensumUnknown = false; }); render(); return; }
+        const pr = e.target.closest('[data-precise]');
+        if (pr) { const en = c.entries.find(x => x.id === pr.dataset.precise); if (en) { en.imprecise = false; render(); } return; }
         const ap = e.target.closest('[data-applyadj]');
         if (ap) { c.adjustmentId = ap.dataset.applyadj; render(); return; }
         const dm = e.target.closest('[data-dismissadj]');

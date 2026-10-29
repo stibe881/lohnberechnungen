@@ -754,3 +754,5 @@ input.invalid { border-color: #c62828; box-shadow: 0 0 0 2px rgba(198, 40, 40, .
 .doc-chip { white-space: nowrap; }
 .doc-chip em { color: var(--warn); font-style: normal; }
 .entries-table .badge-ok { margin-left: 0; margin-top: 2px; display: inline-block; }
+button.badge-btn { border: none; cursor: pointer; font: inherit; font-size: .7rem; font-weight: 700; }
+button.badge-btn:hover { filter: brightness(.95); text-decoration: line-through; }
