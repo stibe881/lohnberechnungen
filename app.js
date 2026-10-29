@@ -1373,7 +1373,7 @@
     function pensumNoticeHtml(c) {
         const list = c.entries.filter(e => e.pensumUnknown && e.include && e.category !== '__ausbildung' && e.category !== '__familie');
         if (!list.length) return '';
-        return `<div class="notice">${icon('alert')} <b>Pensum unbekannt bei ${list.length} Stelle${list.length > 1 ? 'n' : ''}:</b> ${list.slice(0, 4).map(e => `«${esc(e.title)}»`).join(', ')}${list.length > 4 ? ` und ${list.length - 4} weitere` : ''}. Der Lebenslauf nennt kein Pensum, gerechnet wird mit 100 %. Bis 50 % Pensum zählt nach den Regeln oft nur die Hälfte – bitte die Pensen in der Tabelle unten eintragen (z. B. aus dem Bewerbungsdossier oder Arbeitszeugnis).</div>`;
+        return `<div class="notice">${icon('alert')} <b>Pensum unbekannt bei ${list.length} Stelle${list.length > 1 ? 'n' : ''}:</b> ${list.slice(0, 4).map(e => `«${esc(e.title)}»`).join(', ')}${list.length > 4 ? ` und ${list.length - 4} weitere` : ''}. Der Lebenslauf nennt kein Pensum, gerechnet wird mit 100 %. Bis 50 % Pensum zählt nach den Regeln oft nur die Hälfte – bitte die Pensen in der Tabelle unten eintragen (z. B. aus dem Bewerbungsdossier oder Arbeitszeugnis). <button type="button" class="btn btn-ghost btn-sm" data-pensumok>Pensen sind geprüft</button></div>`;
     }
     /** Hinweis auf mögliche Doppelbewerbung. */
 
@@ -1875,6 +1875,15 @@
         if (f === 'category') entry.include = t.value !== '__ausbildung' || tplOf(c).rules.education.factor > 0;
         render();
     });
+    // Pensum-Feld bearbeitet (auch wenn derselbe Wert bestätigt wird): Markierung «Pensum?» entfernen
+    detail.addEventListener('focusout', e => {
+        const t = e.target;
+        if (!t.matches || !t.matches('input[data-f="pensum"]')) return;
+        const c = candidates.find(x => x.id === selectedId);
+        const row = t.closest('tr[data-id]');
+        const entry = c && row && c.entries.find(x => x.id === row.dataset.id);
+        if (entry && entry.pensumUnknown && t.value.trim() !== '') { entry.pensumUnknown = false; render(); }
+    });
     detail.addEventListener('click', e => {
         const c = candidates.find(x => x.id === selectedId);
         if (!c || c.loading) return;
@@ -1886,6 +1895,7 @@
         }
         const dup = e.target.closest('[data-opendup]');
         if (dup) { selectedId = dup.dataset.opendup; cvShownId = null; render(); return; }
+        if (e.target.closest('[data-pensumok]')) { c.entries.forEach(x => { x.pensumUnknown = false; }); render(); return; }
         const ap = e.target.closest('[data-applyadj]');
         if (ap) { c.adjustmentId = ap.dataset.applyadj; render(); return; }
         const dm = e.target.closest('[data-dismissadj]');
