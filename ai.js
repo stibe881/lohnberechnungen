@@ -187,18 +187,22 @@ function makeClient({ apiKey, serverUrl, password }) {
 }
 
 /** Sendet die Anfrage und gibt die JSON-Antwort (strukturierte Ausgabe) zurück. */
+const REQUEST_TIMEOUT_MS = 4 * 60 * 1000; // danach gilt die Anfrage als hängen geblieben (Regeln übernehmen)
 async function createJson(client, params, viaServer, tooLong) {
     let response;
+    const opts = { timeout: REQUEST_TIMEOUT_MS, maxRetries: 1 };
     try {
         if (params.model === 'claude-opus-5') {
             // Server-seitiger Fallback: lehnt Claude Opus 5 ab, übernimmt automatisch ein passendes Modell
-            response = await client.beta.messages.create({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
+            response = await client.beta.messages.create({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }, opts);
         } else {
-            response = await client.messages.create(params);
+            response = await client.messages.create(params, opts);
         }
     } catch (err) {
+        if (err && (err.name === 'APIConnectionTimeoutError' || /timed? ?out/i.test(err.message || ''))) throw new Error('Claude hat nach 4 Minuten nicht geantwortet – Auswertung mit den Regeln.');
         throw new Error(friendlyError(err, viaServer));
     }
+
 
     if (response.stop_reason === 'refusal') throw new Error('Claude hat die Auswertung dieses Dokuments abgelehnt.');
     if (response.stop_reason === 'max_tokens') throw new Error(tooLong);

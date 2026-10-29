@@ -536,12 +536,27 @@
         await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
     }
 
+    // Läuft schon eine Auswertung, wartet die nächste in der Warteschlange statt verloren zu gehen
     let busy = false;
-    async function withBusy(fn) {
-        if (busy) return;
+    const queue = [];
+    async function withBusy(fn, label) {
+        if (busy) {
+            queue.push({ fn, label });
+            toast(`${label || 'Die Aktion'} wartet, bis die laufende Auswertung fertig ist (${queue.length} in der Warteschlange).`, 'info');
+            return;
+        }
         busy = true;
         document.body.classList.add('busy');
-        try { await fn(); } finally { busy = false; document.body.classList.remove('busy'); }
+        try { await fn(); }
+        catch (e) { toast('Fehler: ' + e.message, 'error'); }
+        finally {
+            busy = false;
+            document.body.classList.remove('busy');
+            // Hängengebliebene Personen freigeben
+            candidates.forEach(c => { if (c.loading) { c.loading = false; c.step = ''; c.aiError = c.aiError || 'Auswertung abgebrochen'; } });
+            const next = queue.shift();
+            if (next) setTimeout(() => withBusy(next.fn, next.label), 0);
+        }
     }
 
     /** Fragt vor dem ersten Senden an Claude nach, ob die Bewerbenden informiert sind. */
@@ -567,6 +582,11 @@
     async function processSources(sources) {
         if (!sources.length) return;
         await withBusy(async () => {
+            await processNow(sources);
+        }, sources.length === 1 ? `«${sources[0].name}»` : `${sources.length} Dateien`);
+    }
+    async function processNow(sources) {
+        {
             let useAi = aiActive();
             if (useAi && !(await ensurePrivacyAck())) {
                 useAi = false;
@@ -582,7 +602,7 @@
                     const { text, pdfBase64, scannedPages } = src.file ? await readFile(src.file, useAi) : { text: src.text, pdfBase64: null };
                     setProgress(++read, sources.length, `Dateien werden gelesen (${read} von ${sources.length}) …`);
                     // Zeugnisse und Belege im gleichen Stapel: nicht als Person anlegen, sondern der Person zuordnen
-                    if (src.file && looksLikeReference(text)) { refDocs.push({ name: src.file.name, text, pdfBase64 }); continue; }
+                    if (src.file && looksLikeReference(text, src.file.name)) { refDocs.push({ name: src.file.name, text, pdfBase64 }); continue; }
                     const c = newCandidate(src.name, text, pdfBase64);
                     if (src.fixedName) c.autoName = false;
                     c.scannedPages = scannedPages && scannedPages.length ? { pages: [...scannedPages], total: scannedPages.total, sentToAi: !!pdfBase64 } : null;
@@ -611,7 +631,8 @@
             const progress = () => setProgress(done, batch.length, `${done} von ${batch.length} ausgewertet` + (useAi ? ' (mit Claude)' : ''));
             progress();
             await pool(batch, useAi ? CONCURRENCY : 1, async c => {
-                await analyzeCandidate(c, useAi);
+                try { await analyzeCandidate(c, useAi); }
+                catch (e) { c.aiError = e.message; c.entries = c.entries || []; }
                 c.loading = false;
                 c.step = '';
                 if (c.aiError) errors.push(c.name + ': KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet');
@@ -631,10 +652,11 @@
             $('#status').textContent = '';
             render();
             $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
+        }
     }
 
     // --- Darstellung der Regeln & Berechnung (auch für den Bericht) ---
+
     function rulesText(t) {
         const R = t.rules;
         const d = k => P.describeRule(R[k]);
@@ -1275,21 +1297,25 @@
             }
             await applyDocs(c, docs, useAi);
             setProgress(0, 0);
-        });
+        }, `Zeugnisse für ${c.name}`);
     }
     /** Sieht der Text nach einem Zeugnis, einer Bestätigung, einem Vertrag oder Diplom aus – und nicht nach einem Lebenslauf? */
-    function looksLikeReference(text) {
-        const all = String(text || '').replace(/\s+/g, ' ').toLowerCase();
+    function looksLikeReference(text, fileName) {
+        const name = String(fileName || '').toLowerCase();
+        // Dateiname entscheidet, wenn er eindeutig ist
+        if (/lebenslauf|curriculum|\bcv\b|dossier|bewerbung/.test(name)) return false;
+        if (/zeugnis|best[äa]tigung|diplom|zertifikat|vertrag|attest|certificate|reference/.test(name)) return true;
+        const raw = String(text || '');
+        const all = raw.replace(/\s+/g, ' ').toLowerCase();
         const head = all.slice(0, 2500);
-        // Zeugnis-Merkmale: Titel oder typische Formulierungen («war bei uns tätig», «verlässt uns», «Beschäftigungsgrad»)
+        // Lebenslauf-Merkmale: Überschriften oder mindestens drei Zeilen mit Zeiträumen
+        const cvHeads = (all.match(/lebenslauf|curriculum vitae|berufserfahrung|beruflicher werdegang|berufliche t[äa]tigkeiten|berufliche erfahrungen|aus- und weiterbildung|schulbildung|sprachkenntnisse|hobbys|hobbies|referenzen|persönliche angaben|personalien|\bprofil\b/g) || []).length;
+        const rangeLines = raw.split(/\r?\n/).filter(l => P.findRanges(l.replace(/\s+/g, ' ').trim()).length).length;
+        if (cvHeads >= 1 || rangeLines >= 3) return false;
+        // Zeugnis-Merkmale: Titel oder typische Formulierungen
         const titleHit = /arbeits\s*zeugnis|zwischen\s*zeugnis|arbeitsbest[äa]tigung|arbeitsvertrag|anstellungsvertrag|f[äa]higkeitszeugnis|\bdiplom\b|lehrabschluss|zertifikat|certificate of employment|reference letter|lettre de travail|certificat de travail/.test(head);
         const phraseHits = (all.match(/bei uns t[äa]tig|in unserem (?:betrieb|unternehmen|team|haus)|verl[äa]sst uns|verliess uns|auf eigenen wunsch|wir w[üu]nschen (?:ihr|ihm)|wir bedauern|besch[äa]ftigungsgrad|anstellungsgrad|wir best[äa]tigen|es wird best[äa]tigt|zu unserer vollen zufriedenheit|zu unserer vollsten zufriedenheit|arbeitsverh[äa]ltnis|dienstverh[äa]ltnis/g) || []).length;
-        const isRef = titleHit || phraseHits >= 2;
-        // Lebenslauf-Merkmale: Überschriften und mehrere Zeiträume
-        const cvHeads = (all.match(/lebenslauf|curriculum vitae|berufserfahrung|beruflicher werdegang|berufliche t[äa]tigkeiten|aus- und weiterbildung|schulbildung|sprachkenntnisse|hobbys|hobbies|referenzen|persönliche angaben|personalien/g) || []).length;
-        const ranges = (all.match(/(?:\d{2}\.)?\d{4}\s*(?:–|-|bis)\s*(?:(?:\d{2}\.)?\d{4}|heute)/g) || []).length;
-        const isCv = cvHeads >= 2 && ranges >= 3;
-        return isRef && !isCv;
+        return titleHit || phraseHits >= 2;
     }
     /** Gelesene Dokumente auf eine Person anwenden (Zuordnung mit Claude oder Regeln), rückgängig. */
     async function applyDocs(c, docs, useAi) {
@@ -1918,7 +1944,7 @@
                 if (c.aiError) toast('KI-Auswertung fehlgeschlagen (' + c.aiError + ') – Regeln verwendet', 'warn');
                 render();
                 undoable(`${c.name} neu ausgewertet${overrideCount({ entries: before.entries }) ? ' – manuelle Anpassungen ersetzt' : ''}.`, () => { Object.assign(c, clone(before)); render(); });
-            });
+            }, `Neu auswerten von ${c.name}`);
         }
     });
 
