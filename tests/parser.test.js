@@ -541,3 +541,16 @@ assert.deepStrictEqual([byT('Englisch').start, byT('Englisch').end, byT('Englisc
 assert.strictEqual(byT('Kaufmännische').category, '__ausbildung');
 assert.strictEqual(byT('Lehrdiplom').category, '__zweitausbildung'); // spätere Berufsausbildung, nicht das Sprachdiplom
 console.log('Ausbildungen mit Einzeldatum bestanden.');
+
+// Berufsbegleitend aus parallelen Stellen ableiten: Studium neben 80 %-Stelle → Pensum 50; Vollzeitstudium ohne Stelle → 100
+const ptCv = 'Berufserfahrung\n08.2014 – heute Fachfrau Betreuung, Wohnheim A, 80 %\n\nAusbildung\n2019 – 2022 Sozialpädagogin HF, Agogis\n2011 – 2014 Fachfrau Betreuung EFZ, Wohnheim A\n';
+const ptE = P.extractEntries(ptCv, P.DEFAULT_SETTINGS, hrToday);
+assert.deepStrictEqual([ptE.find(e => /HF/.test(e.title)).category, ptE.find(e => /HF/.test(e.title)).pensum], ['__zweitausbildung', 50]);
+assert.ok(/berufsbegleitend/.test(ptE.find(e => /HF/.test(e.title)).details));
+const ftCv = 'Berufserfahrung\n08.2022 – heute Sozialpädagogin, Wohnheim A, 80 %\n08.2014 – 07.2019 Fachfrau Betreuung, Wohnheim A, 80 %\n\nAusbildung\n2019 – 2022 Sozialpädagogin HF, Agogis\n2011 – 2014 Fachfrau Betreuung EFZ\n';
+assert.strictEqual(P.extractEntries(ftCv, P.DEFAULT_SETTINGS, hrToday).find(e => /HF/.test(e.title)).pensum, 100);
+// Mit der Regel «Zweitausbildung: über 50 %: 50 %, bis 50 %: 0 %» zählt nur das Vollzeitstudium
+const zwTpl = P.upgradeTemplate({ target: 'sozial', rules: Object.assign({}, hrRules, { secondEducation: { mode: 'threshold', factor: 50, low: 0 } }) });
+assert.strictEqual(P.weightFor({ category: '__zweitausbildung', pensum: 100, include: true }, zwTpl), 50);
+assert.strictEqual(P.weightFor({ category: '__zweitausbildung', pensum: 50, include: true }, zwTpl), 0);
+console.log('Berufsbegleitend ableiten bestanden.');

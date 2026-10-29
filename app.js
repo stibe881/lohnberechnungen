@@ -466,6 +466,7 @@
                     ai.mode === 'server' ? { serverUrl: SERVER_URL, password: ai.password } : { apiKey: ai.apiKey }
                 ));
                 c.entries = res.entries;
+                P.markPartTimeEducation(c.entries); // berufsbegleitend aus parallelen Stellen ableiten
                 c.hinweise = res.hinweise;
                 c.aiFlags = res.flags || null;
                 // Zeugnisse und Belege aus dem Dossier: Stellen belegen (genaue Daten, Pensum) und vermerken

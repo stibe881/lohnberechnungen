@@ -575,8 +575,8 @@
                 title: title || '(ohne Bezeichnung)',
                 details: [volunteer ? 'Ehrenamt / Verein – nicht angerechnet' : '', hourly ? 'im Stundenlohn – Pensum unbekannt, 100 % angenommen' : '', details].filter(Boolean).join(' · '),
                 category,
-                // Berufsbegleitende Ausbildung: Pensum 50 (zählt bei «bis 50 %»-Regel nicht), Vollzeitstudium 100
-                pensum: isEdu && /berufsbegleitend|nebenberuflich|teilzeitstudium|in teilzeit|part[- ]time/i.test(title + ' ' + details) && !pensumStated(li.text + ' ' + details) ? 50 : detectPensum(li.text + ' ' + details),
+                pensum: detectPensum(li.text + ' ' + details),
+                pensumStated: isEdu ? pensumStated(li.text + ' ' + details) : undefined, // Ausbildung: ausdrückliches Pensum bleibt, sonst wird «berufsbegleitend» abgeleitet
                 pensumUnknown: !hourly && !pensumStated(li.text + ' ' + details), // kein Pensum angegeben: 100 % angenommen
 
 
@@ -587,7 +587,37 @@
         }
         markSecondEducation(entries);
         markHourlyDuringEducation(entries);
+        markPartTimeEducation(entries, today);
         return entries;
+    }
+
+    /**
+     * Berufsbegleitende Ausbildungen erkennen: Läuft während mindestens der Hälfte der Ausbildungszeit eine angerechnete
+     * Stelle mit zusammen mindestens 50 % Pensum, gilt die Ausbildung als berufsbegleitend (Pensum 50, zählt bei der
+     * Regel «bis 50 %: 0 %» nicht). Ein Vollzeitstudium ohne parallele Stelle behält 100 %. Steht das Pensum ausdrücklich, bleibt es.
+     */
+    function markPartTimeEducation(entries, today) {
+        const endIdx = dateStart(cutoffDate({ cutoff: 'today' }, today || new Date()));
+        const edus = entries.filter(e => (e.category === '__ausbildung' || e.category === '__zweitausbildung') && !e.pensumStated);
+        if (!edus.length) return;
+        const work = entries.filter(e => e.include && !NOT_WORK.has(e.category) && e.category !== '__praktikum' && dateStart(e.start) !== null);
+        for (const edu of edus) {
+            const s = dateStart(edu.start), en = edu.ongoing ? endIdx : dateEnd(edu.end);
+            if (s === null || en === null || en < s) continue;
+            const total = en - s + 1;
+            if (total < 60) continue; // Kurse von wenigen Wochen nicht beurteilen
+            let busyDays = 0;
+            for (let k = s; k <= en; k += 7) { // wochenweise abtasten
+                const pensum = work.reduce((sum, w) => { const ws = dateStart(w.start), we = w.ongoing ? endIdx : dateEnd(w.end); return ws <= k && (we ?? endIdx) >= k ? sum + (+w.pensum || 0) : sum; }, 0);
+                if (pensum >= 50) busyDays += 7;
+            }
+            const partTime = busyDays >= total / 2;
+            const stated = /berufsbegleitend|nebenberuflich|teilzeitstudium|in teilzeit|part[- ]time/i.test(edu.title + ' ' + edu.details);
+            if (partTime || stated) {
+                edu.pensum = 50;
+                if (!/berufsbegleitend/i.test(edu.details)) edu.details = ['berufsbegleitend' + (partTime && !stated ? ' (parallel zu einer Stelle, aus dem Lebenslauf abgeleitet)' : ''), edu.details].filter(Boolean).join(' · ');
+            } else if (!stated) edu.pensum = 100;
+        }
     }
 
     /** Stundenlohn-Jobs während einer Berufsausbildung (Studium, Lehre) werden nicht angerechnet – wie in der Praxis der Personalabteilung. */
@@ -1464,7 +1494,7 @@
     DEFAULT_SETTINGS.classAdjustments = DEFAULT_ADJUSTMENTS.map(x => Object.assign({}, x));
     DEFAULT_SETTINGS.salaryTables = [];
 
-    const api = { extractEntries, extractBirth, extractChildren, familyEntries, readReferenceText, applyReferences, cutoffIndex, dateStart, dateEnd, dayToIso, DAYS_PER_YEAR, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
+    const api = { extractEntries, extractBirth, extractChildren, familyEntries, markPartTimeEducation, readReferenceText, applyReferences, cutoffIndex, dateStart, dateEnd, dayToIso, DAYS_PER_YEAR, findRanges, tokenize, classify, compute, placement, weightFor, ruleKeyFor, hrCategory, HR_CATEGORY_NAMES, describeRule, roundYears, detectSection, ymToIndex, normalizeSettings, makeTemplate, parseAmount, formatChf,
 
  parseCsv, parseSalaryTable, checkSalaryTable, normalizeSalaryTable, selectSalaryTable, cutoffDate, effectiveTemplate, suggestTemplates, keywordHit, parseRegulationText, buildFromRegulation, keywordsFromName, suggestCorrections, suggestedAllowances, salaryOutlook, findDuplicates, leadershipYears, STATUSES, AUTO_KINDS, upgradeTemplate, DEFAULT_SETTINGS, SPECIAL_CATEGORIES, TARGETABLE_SPECIALS, ROUNDING, MODES, RULE_KEYS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
